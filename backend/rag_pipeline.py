@@ -10,10 +10,14 @@ from tools import emit_rag_step
 
 load_dotenv()
 
-API_KEY = os.getenv("ARK_API_KEY")
-MODEL = os.getenv("MODEL")
-BASE_URL = os.getenv("BASE_URL")
-GRADE_MODEL = os.getenv("GRADE_MODEL", "gpt-4.1")
+def _env(name: str, default: str = "") -> str:
+    return (os.getenv(name, default) or "").strip()
+
+
+API_KEY = _env("ARK_API_KEY")
+MODEL = _env("MODEL")
+BASE_URL = _env("BASE_URL")
+GRADE_MODEL = _env("GRADE_MODEL") or MODEL or "gpt-4.1"
 
 _grader_model = None
 _router_model = None
@@ -170,10 +174,24 @@ def grade_documents_node(state: RAGState) -> RAGState:
     question = state["question"]
     context = state.get("context", "")
     prompt = GRADE_PROMPT.format(question=question, context=context)
-    response = grader.with_structured_output(GradeDocuments).invoke(
-        [{"role": "user", "content": prompt}]
-    )
-    score = (response.binary_score or "").strip().lower()
+    try:
+        response = grader.with_structured_output(GradeDocuments).invoke(
+            [{"role": "user", "content": prompt}]
+        )
+        score = (response.binary_score or "").strip().lower()
+    except Exception as e:
+        # 某些模型在结构化输出阶段可能返回非标准 JSON，避免对话中断。
+        score = "yes" if context.strip() else "no"
+        emit_rag_step("⚠️", "相关性评估解析失败，已启用兜底", str(e))
+        grade_update = {
+            "grade_score": score,
+            "grade_route": "generate_answer" if score == "yes" else "rewrite_question",
+            "rewrite_needed": score != "yes",
+            "grade_error": str(e),
+        }
+        rag_trace = state.get("rag_trace", {}) or {}
+        rag_trace.update(grade_update)
+        return {"route": grade_update["grade_route"], "rag_trace": rag_trace}
     route = "generate_answer" if score == "yes" else "rewrite_question"
     if route == "generate_answer":
         emit_rag_step("✅", "文档相关性评估通过", f"评分: {score}")

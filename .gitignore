@@ -5,14 +5,15 @@ build/
 dist/
 wheels/
 *.egg-info
-
 # Virtual environments
 .venv
 .env    
+**/node_modules/
 
 #docker files
 volumes/
 
 # OS files
 .DS_Store
+node_modules/
 data/

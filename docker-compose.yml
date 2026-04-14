@@ -1,108 +1,120 @@
-version: '3.5'
+version: "3.5" # docker-compose 文件语法版本（在新版本中已废弃，这里仅作兼容使用）
 
 services:
+  # PostgreSQL 关系型数据库，存储业务侧结构化数据
   postgres:
-    container_name: supermew-postgres
-    image: postgres:15
+    container_name: supermew-postgres # 容器名称，便于 docker 命令管理与排查
+    image: postgres:15 # 使用官方 PostgreSQL 15 版本镜像
     environment:
-      POSTGRES_DB: langchain_app
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: langchain_app # 默认创建的数据库名
+      POSTGRES_USER: postgres # 数据库用户名（开发环境默认）
+      POSTGRES_PASSWORD: postgres # 数据库密码（开发环境默认，生产环境请修改）
     ports:
-      - "5432:5432"
+      - "5432:5432" # 宿主机 5432 端口映射到容器 5432，方便本地工具直接连接
     volumes:
-      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/postgres:/var/lib/postgresql/data
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/postgres:/var/lib/postgresql/data # 数据目录持久化，容器删除数据仍保留在宿主机
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d langchain_app"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+      test: ["CMD-SHELL", "pg_isready -U postgres -d langchain_app"] # 通过 pg_isready 检查数据库是否可用
+      interval: 10s # 健康检查间隔
+      timeout: 5s # 单次检查超时时间
+      retries: 10 # 连续失败次数，超过则认为不健康
 
+  # Redis 内存缓存/消息队列组件，用于加速读写、存储会话或任务队列等
   redis:
     container_name: supermew-redis
-    image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    image: redis:7-alpine # 体积更小的 Alpine 版本 Redis
+    command: ["redis-server", "--appendonly", "yes"] # 开启 AOF 持久化，降低意外宕机时的数据丢失风险
     ports:
-      - "6379:6379"
+      - "6379:6379" # 宿主机 6379 映射到容器 6379
     volumes:
-      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/redis:/data
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/redis:/data # Redis 数据持久化目录
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "ping"] # 通过 PING 判断 Redis 是否存活
       interval: 10s
       timeout: 5s
       retries: 10
 
+  # etcd：为 Milvus 提供分布式一致性键值存储，保存元数据与协调信息
   etcd:
     container_name: milvus-etcd
     image: quay.io/coreos/etcd:v3.5.18
     environment:
-      - ETCD_AUTO_COMPACTION_MODE=revision
-      - ETCD_AUTO_COMPACTION_RETENTION=1000
-      - ETCD_QUOTA_BACKEND_BYTES=4294967296
-      - ETCD_SNAPSHOT_COUNT=50000
+      - ETCD_AUTO_COMPACTION_MODE=revision # 基于 revision 的自动压缩模式
+      - ETCD_AUTO_COMPACTION_RETENTION=1000 # 仅保留最近 1000 个 revision，控制历史体积
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296 # 后端存储容量上限 4GB
+      - ETCD_SNAPSHOT_COUNT=50000 # 每 50000 次事务生成一次快照
     volumes:
-      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/etcd:/etcd
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/etcd:/etcd # etcd 数据持久化目录
+    # 覆盖镜像默认启动命令，指定监听地址、对外通告地址以及数据目录
     command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
     healthcheck:
-      test: ["CMD", "etcdctl", "endpoint", "health"]
+      test: ["CMD", "etcdctl", "endpoint", "health"] # 使用 etcdctl 检查当前节点健康状态
       interval: 30s
       timeout: 20s
       retries: 3
 
+  # MinIO：S3 兼容对象存储，Milvus 用它存放段文件、索引文件等大对象
   minio:
     container_name: milvus-minio
     image: minio/minio:RELEASE.2024-05-28T17-19-04Z
     environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      MINIO_ACCESS_KEY: minioadmin # 访问密钥（开发环境默认值，生产需替换）
+      MINIO_SECRET_KEY: minioadmin # 访问密钥（开发环境默认值，生产需替换）
     ports:
-      - "9001:9001"
-      - "9000:9000"
+      - "9001:9001" # Web 控制台端口（浏览器访问控制台）
+      - "9000:9000" # S3 API 端口（程序访问 MinIO）
     volumes:
-      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/minio:/minio_data
-    command: minio server /minio_data --console-address ":9001"
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/minio:/minio_data # MinIO 数据持久化目录
+    command: minio server /minio_data --console-address ":9001" # 启动 MinIO，指定数据目录与控制台端口
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"] # 调用健康接口确认服务状态
       interval: 30s
       timeout: 20s
       retries: 3
 
+  # Milvus 向量数据库，单机模式（standalone）运行，提供向量写入与相似度检索能力
   standalone:
     container_name: milvus-standalone
     image: milvusdb/milvus:v2.5.14
-    command: ["milvus", "run", "standalone"]
+    command: ["milvus", "run", "standalone"] # 以 standalone 模式运行 Milvus
     security_opt:
-      - seccomp:unconfined
+      - seccomp:unconfined # 放宽 seccomp 限制，避免部分宿主机安全策略导致 Milvus 启动失败
     environment:
-      MINIO_REGION: us-east-1
-      ETCD_ENDPOINTS: etcd:2379
-      MINIO_ADDRESS: minio:9000
+      MINIO_REGION: us-east-1 # MinIO 所在区域配置
+      ETCD_ENDPOINTS: etcd:2379 # etcd 访问地址（通过服务名 etcd 访问）
+      MINIO_ADDRESS: minio:9000 # MinIO API 地址（通过服务名 minio 访问）
     volumes:
-      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/milvus:/var/lib/milvus
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/milvus:/var/lib/milvus # Milvus 数据持久化目录
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"] # 调用健康检查接口
       interval: 30s
-      start_period: 90s
+      start_period: 90s # 启动预热时间，避免初始化阶段被判定为失败
       timeout: 20s
       retries: 3
     ports:
-      - "19530:19530"
-      - "9091:9091"
+      - "19530:19530" # Milvus gRPC 服务端口（客户端 SDK 通常连接该端口）
+      - "9091:9091" # Milvus 健康检查 / 监控端口
     depends_on:
-      - "etcd"
+      - "etcd" # 启动顺序依赖 etcd，保证元数据服务先可用
+
+  # Attu：Milvus 的 Web 可视化管理工具，可在浏览器中管理集合与向量数据
   attu:
     container_name: milvus-attu
-    image: zilliz/attu:v2.5.11  
+    image: zilliz/attu:v2.5.11
     environment:
-      - MILVUS_URL=standalone:19530  
-      - PORT=3000
+      - MILVUS_URL=standalone:19530 # 连接的 Milvus 地址（使用 docker 内部服务名 standalone）
+      - PORT=3000 # Attu 容器内部监听端口
     ports:
-      - "8080:3000"
+      - "8080:3000" # 宿主机 8080 映射到容器 3000，浏览器访问 http://localhost:8080
     depends_on:
-      - standalone
+      - standalone # 依赖 Milvus 服务，确保其先启动
     networks:
-      - default  
+      - default # 加入默认网络，与其他服务通过服务名互联互通
 
+# 自定义网络配置：
+# - 所有服务默认加入该网络（除非手动指定其他网络）
+# - 服务之间可以通过服务名（postgres / redis / etcd / minio / standalone / attu）互相访问
+# - 该网络与其他 compose 或宿主机上的网络相对隔离，避免端口与命名冲突
 networks:
   default:
-    name: milvus
+    name: milvus # 实际 docker 网络名称，可通过 `docker network ls` 查看
