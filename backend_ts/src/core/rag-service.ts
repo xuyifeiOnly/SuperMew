@@ -427,6 +427,7 @@ export class RagService {
   }
 
   async searchKnowledgeBase(query: string, emit?: EmitStep): Promise<{ text: string; ragTrace: RagTrace }> {
+    // 阶段 1：先用原始 query 做一次基础检索，并把关键过程通过 emit 输出给前端。
     await this.emitStep(emit, '🔍', '正在检索知识库...', `查询: ${query.slice(0, 50)}`);
     const initial = await this.retrieveDocuments(query, 5);
     const initialDocs = initial.docs;
@@ -444,6 +445,7 @@ export class RagService {
       `启用: ${Boolean(initial.meta.auto_merge_enabled)}，应用: ${Boolean(initial.meta.auto_merge_applied)}，替换片段: ${initial.meta.auto_merge_replaced_chunks ?? 0}`,
     );
 
+    // 初始化 RAG 追踪信息：先记录“初次检索”阶段的召回结果和元数据。
     let ragTrace: RagTrace = {
       tool_used: true,
       tool_name: 'search_knowledge_base',
@@ -467,6 +469,7 @@ export class RagService {
       auto_merge_steps: Number(initial.meta.auto_merge_steps ?? 0),
     };
 
+    // 阶段 2：评估初检索上下文是否足够回答，决定“直接回答”还是“重写查询”。
     const grade = await this.gradeDocuments(query, initialContext);
     ragTrace = {
       ...ragTrace,
@@ -476,6 +479,7 @@ export class RagService {
       grade_error: grade.error ?? null,
     };
 
+    // 相关性足够：直接返回初次检索结果，不再进入扩展检索流程。
     if (grade.route === 'generate_answer') {
       await this.emitStep(emit, '✅', '文档相关性评估通过', `评分: ${grade.score}`);
       return {
@@ -486,6 +490,7 @@ export class RagService {
 
     await this.emitStep(emit, '⚠️', '文档相关性不足，将重写查询', `评分: ${grade.score}`);
     await this.emitStep(emit, '✏️', '正在重写查询...');
+    // 阶段 3：选择查询扩展策略（step_back / hyde / complex）。
     const strategy = await this.chooseRewriteStrategy(query);
     let expandedQuery = query;
     let stepBackQuestion = '';
@@ -519,6 +524,7 @@ export class RagService {
     let rerankModel = '';
     let rerankEndpoint = '';
 
+    // 按策略执行检索并汇总结果，同时累计 rerank/merge 等可观测元数据。
     const collect = async (sourceQuery: string, label: string): Promise<void> => {
       const response = await this.retrieveDocuments(sourceQuery, 5);
       mergedDocs.push(...response.docs);
@@ -545,13 +551,16 @@ export class RagService {
       );
     };
 
+    // HyDE：使用“假设文档”作为检索输入，适合语义补全场景。
     if (strategy === 'hyde' || strategy === 'complex') {
       await collect(hypotheticalDoc || query, 'HyDE');
     }
+    // Step-back：使用“退步问题扩展后查询”检索，适合抽象归纳场景。
     if (strategy === 'step_back' || strategy === 'complex') {
       await collect(expandedQuery, 'Step-back');
     }
 
+    // 阶段 4：对扩展阶段多路召回做去重，并重排 rrf_rank 以便前端一致展示。
     const deduped: RetrievedChunk[] = [];
     const seen = new Set<string>();
     for (const doc of mergedDocs) {
@@ -564,6 +573,7 @@ export class RagService {
     }
 
     await this.emitStep(emit, '✅', `扩展检索完成，共 ${deduped.length} 个片段`);
+    // 回填扩展阶段追踪信息，覆盖为最终返回给上层的 ragTrace。
     ragTrace = {
       ...ragTrace,
       expanded_query: expandedQuery,
@@ -591,6 +601,7 @@ export class RagService {
       auto_merge_steps: autoMergeSteps,
     };
 
+    // 阶段 5：返回最终检索文本和完整追踪信息；若为空则返回标准兜底文案。
     return {
       text: deduped.length ? `Retrieved Chunks:\n${formatDocs(deduped)}` : 'No relevant documents found in the knowledge base.',
       ragTrace,

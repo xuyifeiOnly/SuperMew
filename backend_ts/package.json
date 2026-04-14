@@ -4,10 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm build && node dist/server.js",
+    "dev": "bun run ./src/server.ts",
+    "dev:tsnode": "node --inspect=9230 --loader ts-node/esm --enable-source-maps ./src/server.ts",
     "start": "pnpm build && node dist/server.js",
+    "dev:debug:dist": "pnpm build && node --inspect=9229 --enable-source-maps dist/server.js",
     "build": "tsc -p tsconfig.json",
-    "ceshi":"bun run ./ceshi/iterator.ts"
+    "ceshi": "bun run ./ceshi/iterator.ts"
   },
   "dependencies": {
     "@koa/cors": "^5.0.0",
@@ -41,6 +43,7 @@
     "@types/koa__router": "^12.0.5",
     "@types/node": "^22.10.2",
     "@types/pdf-parse": "^1.1.4",
+    "ts-node": "^10.9.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

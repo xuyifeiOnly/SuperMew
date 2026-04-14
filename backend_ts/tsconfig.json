@@ -1,4 +1,10 @@
 {
+  "ts-node": {
+    "esm": true,
+    "experimentalResolver": true,
+    "transpileOnly": true,
+    "files": true
+  },
   "compilerOptions": {
     "target": "ES2022",
     "module": "NodeNext",
@@ -11,7 +17,9 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["node"]
+    "types": ["node"],
+    "sourceMap": true,
+    "inlineSources": true
   },
   "include": ["src/**/*.ts"]
 }

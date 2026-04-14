@@ -1,0 +1,58 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Server.ts (ts-node, No Build)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--loader", "ts-node/esm", "--enable-source-maps"],
+      "program": "${workspaceFolder}/src/server.ts",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "sourceMaps": true,
+      "smartStep": true,
+      "skipFiles": ["<node_internals>/**"],
+      "timeout": 30000,
+      "autoAttachChildProcesses": true,
+      "env": {
+        "TS_NODE_PROJECT": "${workspaceFolder}/tsconfig.json",
+        "TS_NODE_FILES": "true",
+        "TS_NODE_TRANSPILE_ONLY": "true",
+        "TS_NODE_EXPERIMENTAL_RESOLVER": "true"
+      },
+      "resolveSourceMapLocations": [
+        "${workspaceFolder}/**",
+        "!**/node_modules/**"
+      ]
+    },
+   
+    {
+      "name": "Debug Server.ts (ts-node, Break On Start)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--loader", "ts-node/esm", "--enable-source-maps"],
+      "program": "${workspaceFolder}/src/server.ts",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"],
+      "sourceMaps": true,
+      "stopOnEntry": true,
+      "smartStep": true,
+      "timeout": 30000,
+      "autoAttachChildProcesses": true,
+      "env": {
+        "TS_NODE_PROJECT": "${workspaceFolder}/tsconfig.json",
+        "TS_NODE_FILES": "true",
+        "TS_NODE_TRANSPILE_ONLY": "true",
+        "TS_NODE_EXPERIMENTAL_RESOLVER": "true"
+      },
+      "resolveSourceMapLocations": [
+        "${workspaceFolder}/**",
+        "!**/node_modules/**"
+      ]
+    },
+    
+  ]
+}

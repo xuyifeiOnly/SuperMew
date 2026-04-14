@@ -1,20 +1,25 @@
-import { AsyncQueue } from './async-queue.js';
-import { ConversationStorage } from './conversation-storage.js';
-import { RagService } from './rag-service.js';
-import { getCurrentWeather } from './weather.js';
-import type { RagTrace, StreamEvent } from '../types.js';
-import { z } from 'zod';
-import { createAgent } from 'langchain';
-import { tool } from 'langchain/tools';
-import { AIMessage, BaseMessage, HumanMessage, SystemMessage } from '@langchain/core/messages';
+import { AsyncQueue } from "./async-queue.js";
+import { ConversationStorage } from "./conversation-storage.js";
+import { RagService } from "./rag-service.js";
+import { getCurrentWeather } from "./weather.js";
+import type { RagTrace, StreamEvent } from "../types.js";
+import { z } from "zod";
+import { createAgent } from "langchain";
+import { tool } from "langchain/tools";
+import {
+  AIMessage,
+  BaseMessage,
+  HumanMessage,
+  SystemMessage,
+} from "@langchain/core/messages";
 import {
   EmitEvent,
   createChatModel,
   modelResponseToText,
   normalizeText,
   promptModelText,
-} from './shared.js';
-import { env } from '../config.js';
+} from "./shared.js";
+import { env } from "../config.js";
 
 export class ChatAgentService {
   constructor(
@@ -24,20 +29,22 @@ export class ChatAgentService {
 
   private systemPrompt(): string {
     return [
-      'You are a cute cat bot that loves to help users.',
-      'Use search_knowledge_base when users ask document or knowledge questions.',
-      'Do not call the same tool repeatedly in one turn.',
-      'At most one knowledge tool call per turn.',
-      'If the retrieved context is insufficient, answer honestly that you do not know.',
-    ].join(' ');
+      "你是一只可爱的猫猫助手，热心帮助用户。",
+      "当用户询问文档或知识相关问题时，使用 search_knowledge_base 工具。",
+      "在同一轮对话中，不要重复调用同一个工具。",
+      "每轮对话最多只允许调用一次知识检索工具。",
+      "如果检索到的上下文信息不足，请如实告知你不知道。",
+    ].join(" ");
   }
 
-  private toAgentMessages(history: Array<{ type: 'human' | 'ai' | 'system'; content: string }>): BaseMessage[] {
+  private toAgentMessages(
+    history: Array<{ type: "human" | "ai" | "system"; content: string }>,
+  ): BaseMessage[] {
     return history.map((item) => {
-      if (item.type === 'human') {
+      if (item.type === "human") {
         return new HumanMessage(item.content);
       }
-      if (item.type === 'ai') {
+      if (item.type === "ai") {
         return new AIMessage(item.content);
       }
       return new SystemMessage(item.content);
@@ -45,36 +52,43 @@ export class ChatAgentService {
   }
 
   private extractTextFromAgentResult(messages: unknown[]): string {
-    const last = messages[messages.length - 1] as { content?: unknown } | undefined;
+    const last = messages[messages.length - 1] as
+      | { content?: unknown }
+      | undefined;
     const content = last?.content;
-    if (typeof content === 'string') {
+    if (typeof content === "string") {
       return normalizeText(content);
     }
     if (Array.isArray(content)) {
       const text = content
         .map((item: any) => {
-          if (typeof item === 'string') {
+          if (typeof item === "string") {
             return item;
           }
-          if (item?.type === 'text') {
+          if (item?.type === "text") {
             return normalizeText(item?.text);
           }
-          return '';
+          return "";
         })
         .filter(Boolean)
-        .join('\n');
+        .join("\n");
       return modelResponseToText(text);
     }
-    return '';
+    return "";
   }
 
-  private async summarizeOldMessages(history: Array<{ type: 'human' | 'ai' | 'system'; content: string }>): Promise<string> {
+  private async summarizeOldMessages(
+    history: Array<{ type: "human" | "ai" | "system"; content: string }>,
+  ): Promise<string> {
     if (!env.fastModel) {
-      return '';
+      return "";
     }
     const conversation = history
-      .map((item) => `${item.type === 'human' ? '用户' : item.type === 'ai' ? 'AI' : '系统'}: ${item.content}`)
-      .join('\n');
+      .map(
+        (item) =>
+          `${item.type === "human" ? "用户" : item.type === "ai" ? "AI" : "系统"}: ${item.content}`,
+      )
+      .join("\n");
     const summary = await promptModelText(
       `请总结以下对话的关键信息，包含用户信息、重要事实和待办事项：\n\n${conversation}`,
       env.fastModel,
@@ -89,7 +103,7 @@ export class ChatAgentService {
     }
     const pieces = content.match(/.{1,24}/g) ?? [content];
     for (const piece of pieces) {
-      await emit({ type: 'content', content: piece });
+      await emit({ type: "content", content: piece });
     }
   }
 
@@ -99,13 +113,17 @@ export class ChatAgentService {
   ): Array<ReturnType<typeof tool>> {
     let knowledgeCalls = 0;
     const weatherTool = tool(
-      async ({ location, extensions }) => await getCurrentWeather(normalizeText(location), normalizeText(extensions || 'base')),
+      async ({ location, extensions }) =>
+        await getCurrentWeather(
+          normalizeText(location),
+          normalizeText(extensions || "base"),
+        ),
       {
-        name: 'get_current_weather',
-        description: '获取指定城市的天气信息',
+        name: "get_current_weather",
+        description: "获取指定城市的天气信息",
         schema: z.object({
           location: z.string(),
-          extensions: z.enum(['base', 'all']).optional(),
+          extensions: z.enum(["base", "all"]).optional(),
         }),
       },
     );
@@ -113,17 +131,20 @@ export class ChatAgentService {
       async ({ query }) => {
         knowledgeCalls += 1;
         if (knowledgeCalls > 1) {
-          return '本轮已执行过知识库检索，请基于已检索内容回答。';
+          return "本轮已执行过知识库检索，请基于已检索内容回答。";
         }
-        const ragResult = await this.ragService.searchKnowledgeBase(normalizeText(query), async (step) => {
-          await emit?.({ type: 'rag_step', step });
-        });
+        const ragResult = await this.ragService.searchKnowledgeBase(
+          normalizeText(query),
+          async (step) => {
+            await emit?.({ type: "rag_step", step });
+          },
+        );
         ragTraceRef.value = ragResult.ragTrace;
         return ragResult.text;
       },
       {
-        name: 'search_knowledge_base',
-        description: '搜索知识库中的相关信息',
+        name: "search_knowledge_base",
+        description: "搜索知识库中的相关信息",
         schema: z.object({
           query: z.string(),
         }),
@@ -132,10 +153,13 @@ export class ChatAgentService {
     return [weatherTool, knowledgeTool];
   }
 
-  private async invokeAgent(messages: BaseMessage[], emit?: EmitEvent): Promise<{ response: string; ragTrace: RagTrace | null }> {
+  private async invokeAgent(
+    messages: BaseMessage[],
+    emit?: EmitEvent,
+  ): Promise<{ response: string; ragTrace: RagTrace | null }> {
     const llm = createChatModel(env.model, 0.3);
     if (!llm) {
-      const fallback = '模型未配置，无法生成回答。';
+      const fallback = "模型未配置，无法生成回答。";
       await this.streamText(fallback, emit);
       return { response: fallback, ragTrace: null };
     }
@@ -148,9 +172,11 @@ export class ChatAgentService {
     });
 
     const result = await agent.invoke({ messages } as any);
-    let finalResponse = this.extractTextFromAgentResult((result as any).messages ?? []);
+    let finalResponse = this.extractTextFromAgentResult(
+      (result as any).messages ?? [],
+    );
     if (!finalResponse) {
-      finalResponse = '未生成有效回答。';
+      finalResponse = "未生成有效回答。";
     }
     if (emit) {
       await this.streamText(finalResponse, emit);
@@ -166,32 +192,41 @@ export class ChatAgentService {
   ): Promise<{ response: string; ragTrace: RagTrace | null }> {
     const history = await this.storage.load(userId, sessionId);
     let messages = history;
-
     if (messages.length > 50) {
       const summary = await this.summarizeOldMessages(messages.slice(0, 40));
       if (summary) {
-        messages = [{ type: 'system', content: `之前的对话摘要：\n${summary}` }, ...messages.slice(40)];
+        messages = [
+          { type: "system", content: `之前的对话摘要：\n${summary}` },
+          ...messages.slice(40),
+        ];
       }
     }
 
-    messages = [...messages, { type: 'human', content: userText }];
+    messages = [...messages, { type: "human", content: userText }];
     const baseMessages = this.toAgentMessages(messages);
-
+    
     const agentResult = await this.invokeAgent(baseMessages, emit);
     const finalResponse = agentResult.response;
     const ragTrace = agentResult.ragTrace;
 
-    const storedMessages = [...messages, { type: 'ai' as const, content: finalResponse }];
+    const storedMessages = [
+      ...messages,
+      { type: "ai" as const, content: finalResponse },
+    ];
     const extra = new Array(storedMessages.length).fill(null);
     extra[extra.length - 1] = { rag_trace: ragTrace };
     await this.storage.save(userId, sessionId, storedMessages, extra);
     if (emit && ragTrace) {
-      await emit({ type: 'trace', rag_trace: ragTrace });
+      await emit({ type: "trace", rag_trace: ragTrace });
     }
     return { response: finalResponse, ragTrace };
   }
 
-  async chat(userText: string, userId: string, sessionId: string): Promise<{ response: string; rag_trace: RagTrace | null }> {
+  async chat(
+    userText: string,
+    userId: string,
+    sessionId: string,
+  ): Promise<{ response: string; rag_trace: RagTrace | null }> {
     const result = await this.runConversation(userText, userId, sessionId);
     return {
       response: result.response,
@@ -199,14 +234,18 @@ export class ChatAgentService {
     };
   }
 
-  chatStream(userText: string, userId: string, sessionId: string): AsyncIterable<StreamEvent> {
+  chatStream(
+    userText: string,
+    userId: string,
+    sessionId: string,
+  ): AsyncIterable<StreamEvent> {
     const queue = new AsyncQueue<StreamEvent>();
     void this.runConversation(userText, userId, sessionId, async (event) => {
       queue.push(event);
     })
       .catch((error) => {
         queue.push({
-          type: 'error',
+          type: "error",
           content: error instanceof Error ? error.message : String(error),
         });
       })
