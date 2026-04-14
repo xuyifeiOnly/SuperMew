@@ -44,6 +44,43 @@ const chunkText = (text: string, chunkSize: number, overlap: number): string[] =
 };
 
 export class DocumentLoaderService {
+  private splitTextByPageBreak(text: string): Array<{ pageNumber: number; text: string }> {
+    const normalized = String(text ?? "").replace(/\r/g, "\n");
+    const chunks = normalized
+      .split(/\f+/)
+      .map((item) => normalizeText(item))
+      .filter(Boolean);
+    if (!chunks.length) {
+      return [];
+    }
+    return chunks.map((chunk, index) => ({
+      pageNumber: index + 1,
+      text: chunk,
+    }));
+  }
+
+  private async extractPdfPages(buffer: Buffer): Promise<Array<{ pageNumber: number; text: string }>> {
+    const pages: Array<{ pageNumber: number; text: string }> = [];
+    await pdfParse(buffer, {
+      pagerender: async (pageData: any) => {
+        const content = await pageData.getTextContent({
+          normalizeWhitespace: false,
+          disableCombineTextItems: false,
+        });
+        const text = (content.items ?? [])
+          .map((item: any) => normalizeText(item?.str))
+          .filter(Boolean)
+          .join(" ");
+        pages.push({
+          pageNumber: pages.length + 1,
+          text,
+        });
+        return text;
+      },
+    } as any);
+    return pages.filter((page) => Boolean(normalizeText(page.text)));
+  }
+
   private buildChunkId(filename: string, pageNumber: number, level: number, index: number): string {
     return `${filename}::p${pageNumber}::l${level}::${index}`;
   }
@@ -127,15 +164,21 @@ export class DocumentLoaderService {
 
     if (lower.endsWith('.pdf')) {
       fileType = 'PDF';
-      const parsed = await pdfParse(buffer);
-      pages = [{ pageNumber: 0, text: parsed.text ?? '' }];
+      pages = await this.extractPdfPages(buffer);
+      if (!pages.length) {
+        const parsed = await pdfParse(buffer);
+        pages = [{ pageNumber: 1, text: parsed.text ?? '' }];
+      }
     } else if (lower.endsWith('.docx') || lower.endsWith('.doc')) {
       fileType = 'Word';
       const result = await mammoth.extractRawText({ buffer });
-      pages = [{ pageNumber: 0, text: result.value ?? '' }];
+      pages = this.splitTextByPageBreak(result.value ?? '');
+      if (!pages.length) {
+        pages = [{ pageNumber: 1, text: result.value ?? '' }];
+      }
     } else if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
       fileType = 'Excel';
-      pages = [{ pageNumber: 0, text: this.normalizeWorkbook(buffer) }];
+      pages = [{ pageNumber: 1, text: this.normalizeWorkbook(buffer) }];
     } else {
       throw new Error(`不支持的文件类型: ${filename}`);
     }

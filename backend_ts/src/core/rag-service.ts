@@ -142,7 +142,7 @@ export class RagService {
       rerank_error: null,
       candidate_count: docsWithRank.length,
     };
-
+    
     if (!meta.rerank_enabled || !docsWithRank.length) {
       return { docs: docsWithRank.slice(0, topK), meta };
     }
@@ -330,6 +330,7 @@ export class RagService {
     const filterExpr = `chunk_level == ${env.leafRetrieveLevel}`;
     try {
       await this.milvusManager.ensureCollection();
+      // 生成dense向量
       const denseEmbedding = (await this.embeddingService.getEmbeddings([query]))[0];
       const sparseEmbedding = this.embeddingService.getSparseEmbedding(query);
       const retrieved = await this.milvusManager.hybridRetrieve(denseEmbedding, sparseEmbedding, candidateK, filterExpr);
