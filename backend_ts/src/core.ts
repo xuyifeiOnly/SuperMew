@@ -51,8 +51,11 @@ export const milvusWriter = new MilvusWriter(embeddingService, milvusManager);
 export const ragService = new RagService(embeddingService, milvusManager, parentChunkStore);
 export const chatAgentService = new ChatAgentService(conversationStorage, ragService);
 
+const quoteMilvusString = (value: string): string =>
+  value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
 export const removeBm25StatsForFilename = async (filename: string): Promise<void> => {
-  const rows = await milvusManager.queryAll(`filename == "${filename}"`, ['text']);
+  const rows = await milvusManager.queryAll(`filename == "${quoteMilvusString(filename)}"`, ['text']);
   embeddingService.incrementRemoveDocuments(rows.map((item) => String(item.text ?? '')));
 };
 

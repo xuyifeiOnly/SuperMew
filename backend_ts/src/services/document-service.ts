@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { LoadedDocumentChunk } from '../types.js';
 import {
   documentLoader,
+  embeddingService,
   HttpError,
   milvusManager,
   milvusWriter,
@@ -35,6 +36,33 @@ const splitDocumentsByLevel = (documents: LoadedDocumentChunk[]) => {
   const parentDocs = documents.filter((item) => item.chunk_level === 1 || item.chunk_level === 2);
   const leafDocs = documents.filter((item) => item.chunk_level === 3);
   return { parentDocs, leafDocs };
+};
+
+const replaceStoredDocument = async (filename: string, documents: LoadedDocumentChunk[]) => {
+  const deleteExpr = `filename == "${quoteMilvusString(filename)}"`;
+  try {
+    await removeBm25StatsForFilename(filename);
+  } catch {}
+  try {
+    await milvusManager.delete(deleteExpr);
+  } catch {}
+  try {
+    await parentChunkStore.deleteByFilename(filename);
+  } catch {}
+
+  const { parentDocs, leafDocs } = splitDocumentsByLevel(documents);
+  if (!leafDocs.length) {
+    throw new HttpError(500, `文档 ${filename} 处理失败，未生成可检索叶子分块`);
+  }
+
+  await parentChunkStore.upsertDocuments(parentDocs);
+  await milvusWriter.writeDocuments(leafDocs);
+
+  return {
+    filename,
+    parentChunkCount: parentDocs.length,
+    leafChunkCount: leafDocs.length,
+  };
 };
 
 export const listDocuments = async (): Promise<Array<{ filename: string; file_type: string; chunk_count: number }>> => {
@@ -70,17 +98,6 @@ export const uploadDocument = async (file?: UploadedDocumentFile) => {
   fs.mkdirSync(uploadDir, { recursive: true });
   await milvusManager.ensureCollection();
 
-  const deleteExpr = `filename == "${quoteMilvusString(filename)}"`;
-  try {
-    await removeBm25StatsForFilename(filename);
-  } catch {}
-  try {
-    await milvusManager.delete(deleteExpr);
-  } catch {}
-  try {
-    await parentChunkStore.deleteByFilename(filename);
-  } catch {}
-
   const filePath = path.join(uploadDir, filename);
   fs.writeFileSync(filePath, file.buffer);
 
@@ -93,19 +110,80 @@ export const uploadDocument = async (file?: UploadedDocumentFile) => {
   if (!documents.length) {
     throw new HttpError(500, '文档处理失败，未能提取内容');
   }
-
-  const { parentDocs, leafDocs } = splitDocumentsByLevel(documents);
-  if (!leafDocs.length) {
-    throw new HttpError(500, '文档处理失败，未生成可检索叶子分块');
-  }
-
-  await parentChunkStore.upsertDocuments(parentDocs);
-  await milvusWriter.writeDocuments(leafDocs);
+  const result = await replaceStoredDocument(filename, documents);
 
   return {
     filename,
-    chunks_processed: leafDocs.length,
-    message: `成功上传并处理 ${filename}，叶子分块 ${leafDocs.length} 个，父级分块 ${parentDocs.length} 个（存入 PostgreSQL）`,
+    chunks_processed: result.leafChunkCount,
+    parent_chunks_processed: result.parentChunkCount,
+    message: `成功上传并处理 ${filename}，叶子分块 ${result.leafChunkCount} 个，父级分块 ${result.parentChunkCount} 个（存入 PostgreSQL）`,
+  };
+};
+
+export const importDocumentsFromFolder = async (rawFolderPath: string) => {
+  const inputFolderPath = String(rawFolderPath ?? '').trim();
+  if (!inputFolderPath) {
+    throw new HttpError(400, '目录路径不能为空');
+  }
+  const folderPath = path.resolve(inputFolderPath);
+  if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
+    throw new HttpError(400, `目录不存在: ${folderPath}`);
+  }
+
+  const entries = fs.readdirSync(folderPath, { withFileTypes: true });
+  const filenames = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter((filename) => {
+      const lower = filename.toLowerCase();
+      return lower.endsWith('.pdf') || lower.endsWith('.docx') || lower.endsWith('.doc') || lower.endsWith('.xlsx') || lower.endsWith('.xls');
+    });
+
+  if (!filenames.length) {
+    throw new HttpError(400, '目录中没有可导入的 PDF、Word 或 Excel 文件');
+  }
+
+  fs.mkdirSync(uploadDir, { recursive: true });
+  await milvusManager.ensureCollection();
+
+  const allDocuments = await documentLoader.loadDocumentsFromFolder(folderPath);
+  const documentsByFilename = new Map<string, LoadedDocumentChunk[]>();
+  for (const doc of allDocuments) {
+    const current = documentsByFilename.get(doc.filename) ?? [];
+    current.push(doc);
+    documentsByFilename.set(doc.filename, current);
+  }
+
+  const imported: Array<{ filename: string; leaf_chunks: number; parent_chunks: number }> = [];
+  const skipped: string[] = [];
+  for (const filename of filenames) {
+    const documents = documentsByFilename.get(filename) ?? [];
+    if (!documents.length) {
+      skipped.push(filename);
+      continue;
+    }
+
+    const targetPath = path.join(uploadDir, filename);
+    fs.copyFileSync(path.join(folderPath, filename), targetPath);
+    const normalizedDocuments = documents.map((doc) => ({
+      ...doc,
+      file_path: targetPath,
+    }));
+    const result = await replaceStoredDocument(filename, normalizedDocuments);
+    imported.push({
+      filename,
+      leaf_chunks: result.leafChunkCount,
+      parent_chunks: result.parentChunkCount,
+    });
+  }
+
+  return {
+    folder_path: folderPath,
+    imported_count: imported.length,
+    skipped_count: skipped.length,
+    imported,
+    skipped,
+    message: `目录导入完成，成功 ${imported.length} 个，跳过 ${skipped.length} 个`,
   };
 };
 
@@ -125,5 +203,16 @@ export const deleteDocument = async (rawFilename: string) => {
     filename,
     chunks_deleted: Number(result?.delete_count ?? 0),
     message: `成功删除文档 ${filename} 的向量数据（本地文件已保留）`,
+  };
+};
+
+export const resetDocumentCollection = async () => {
+  await milvusManager.dropCollection();
+  const parentChunkCount = await parentChunkStore.deleteAll();
+  embeddingService.resetCorpusStats();
+
+  return {
+    parent_chunks_deleted: parentChunkCount,
+    message: '已清空 Milvus collection、父块存储和 BM25 统计状态',
   };
 };

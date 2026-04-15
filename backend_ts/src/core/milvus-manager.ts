@@ -3,6 +3,7 @@ import { env } from '../config.js';
 import type { RetrievedChunk } from '../types.js';
 
 type MilvusSearchResult = RetrievedChunk[];
+const QUERY_MAX_LIMIT = 16384;
 
 export class MilvusManager {
   private client: any;
@@ -87,11 +88,13 @@ export class MilvusManager {
   }
 
   async query(filterExpr = '', outputFields: string[] = ['filename', 'file_type'], limit = 10000, offset = 0): Promise<any[]> {
+    await this.ensureCollection();
+    await this.ensureCollectionLoaded();
     const response = await this.client.query({
       collection_name: env.milvusCollection,
       expr: filterExpr,
       output_fields: outputFields,
-      limit,
+      limit: Math.min(limit, QUERY_MAX_LIMIT),
       offset,
     });
     return response?.data ?? response ?? [];
@@ -101,12 +104,12 @@ export class MilvusManager {
     const all: any[] = [];
     let offset = 0;
     while (true) {
-      const batch = await this.query(filterExpr, outputFields, 16384, offset);
+      const batch = await this.query(filterExpr, outputFields, QUERY_MAX_LIMIT, offset);
       if (!batch.length) {
         break;
       }
       all.push(...batch);
-      if (batch.length < 16384) {
+      if (batch.length < QUERY_MAX_LIMIT) {
         break;
       }
       offset += batch.length;
@@ -214,5 +217,17 @@ export class MilvusManager {
       collection_name: env.milvusCollection,
       expr: filterExpr,
     });
+  }
+
+  async dropCollection(): Promise<void> {
+    const exists = await this.hasCollection();
+    if (!exists) {
+      this.collectionLoaded = false;
+      return;
+    }
+    await this.client.dropCollection({
+      collection_name: env.milvusCollection,
+    });
+    this.collectionLoaded = false;
   }
 }

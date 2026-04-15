@@ -94,6 +94,15 @@ export class EmbeddingService {
     this.persist();
   }
 
+  resetCorpusStats(): void {
+    this.vocab.clear();
+    this.docFreq.clear();
+    this.totalDocs = 0;
+    this.sumTokenLength = 0;
+    this.recomputeAvgLength();
+    this.persist();
+  }
+
   private async getRemoteEmbeddings(texts: string[]): Promise<number[][]> {
     if (!env.embeddingModel) {
       throw new Error('embedding model not configured');

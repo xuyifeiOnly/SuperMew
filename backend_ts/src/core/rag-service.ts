@@ -180,6 +180,9 @@ export class RagService {
           };
         })
         .filter(Boolean) as RetrievedChunk[];
+      if (!reranked.length) {
+        meta.rerank_error = 'empty_rerank_results';
+      }
       return { docs: (reranked.length ? reranked : docsWithRank).slice(0, topK), meta };
     } catch (error) {
       meta.rerank_error = error instanceof Error ? error.message : String(error);

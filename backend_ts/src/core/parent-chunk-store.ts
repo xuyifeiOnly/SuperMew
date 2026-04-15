@@ -80,4 +80,16 @@ export class ParentChunkStore {
     }
     return rows.length;
   }
+
+  async deleteAll(): Promise<number> {
+    const rows = await ParentChunk.findAll();
+    if (!rows.length) {
+      return 0;
+    }
+    await ParentChunk.destroy({ where: {} });
+    for (const row of rows) {
+      await cache.delete(this.cacheKey(row.chunkId));
+    }
+    return rows.length;
+  }
 }

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import mammoth from 'mammoth';
 import pdfParse from 'pdf-parse';
 import XLSX from 'xlsx';
@@ -197,5 +198,31 @@ export class DocumentLoaderService {
       documents.push(...chunks);
     }
     return documents;
+  }
+
+  async loadDocumentsFromFolder(folderPath: string): Promise<LoadedDocumentChunk[]> {
+    const allDocuments: LoadedDocumentChunk[] = [];
+    const entries = fs.readdirSync(folderPath, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+      const filename = entry.name;
+      const lower = filename.toLowerCase();
+      if (!(lower.endsWith('.pdf') || lower.endsWith('.docx') || lower.endsWith('.doc') || lower.endsWith('.xlsx') || lower.endsWith('.xls'))) {
+        continue;
+      }
+
+      const filePath = path.join(folderPath, filename);
+      try {
+        const documents = await this.loadDocument(filePath, filename);
+        allDocuments.push(...documents);
+      } catch {
+        continue;
+      }
+    }
+
+    return allDocuments;
   }
 }
