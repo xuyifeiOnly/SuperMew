@@ -8,6 +8,8 @@ export interface CurrentUser {
 
 export interface RetrievedChunk {
   filename: string;
+  file_type?: string | null;
+  file_path?: string | null;
   page_number?: number | string | null;
   text?: string | null;
   score?: number | null;

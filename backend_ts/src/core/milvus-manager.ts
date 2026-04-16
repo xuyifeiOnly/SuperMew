@@ -4,20 +4,37 @@ import type { RetrievedChunk } from '../types.js';
 
 type MilvusSearchResult = RetrievedChunk[];
 const QUERY_MAX_LIMIT = 16384;
+const SEARCH_OUTPUT_FIELDS = [
+  'text',
+  'filename',
+  'file_type',
+  'file_path',
+  'page_number',
+  'chunk_id',
+  'parent_chunk_id',
+  'root_chunk_id',
+  'chunk_level',
+  'chunk_idx',
+];
 
 export class MilvusManager {
-  private client: any;
+  private client: MilvusClient | null = null;
   private collectionLoaded = false;
 
-  constructor() {
-    this.client = new MilvusClient({
-      address: `${env.milvusHost}:${env.milvusPort}`,
-    });
+  private getClient(): MilvusClient {
+    if (!this.client) {
+      this.client = new MilvusClient({
+        address: `${env.milvusHost}:${env.milvusPort}`,
+      });
+    }
+    return this.client;
   }
 
   private async hasCollection(): Promise<boolean> {
     try {
-      const response = await this.client.hasCollection({ collection_name: env.milvusCollection });
+      const response = (await this.getClient().hasCollection({
+        collection_name: env.milvusCollection,
+      })) as unknown as Record<string, unknown>;
       return Boolean(response?.value ?? response?.has_collection ?? response);
     } catch {
       return false;
@@ -29,8 +46,9 @@ export class MilvusManager {
     if (exists) {
       return;
     }
-    await this.client.createCollection({
+    await this.getClient().createCollection({
       collection_name: env.milvusCollection,
+      enable_dynamic_field: true,
       fields: [
         { name: 'id', data_type: 5, is_primary_key: true, autoID: true },
         { name: 'dense_embedding', data_type: 101, dim: denseDim },
@@ -49,7 +67,7 @@ export class MilvusManager {
     });
 
     try {
-      await this.client.createIndex({
+      await this.getClient().createIndex({
         collection_name: env.milvusCollection,
         field_name: 'dense_embedding',
         index_name: 'dense_embedding_idx',
@@ -57,7 +75,7 @@ export class MilvusManager {
         metric_type: 'IP',
         params: { M: 16, efConstruction: 256 },
       });
-      await this.client.createIndex({
+      await this.getClient().createIndex({
         collection_name: env.milvusCollection,
         field_name: 'sparse_embedding',
         index_name: 'sparse_embedding_idx',
@@ -74,14 +92,14 @@ export class MilvusManager {
     if (this.collectionLoaded) {
       return;
     }
-    await this.client.loadCollection({
+    await this.getClient().loadCollection({
       collection_name: env.milvusCollection,
     });
     this.collectionLoaded = true;
   }
 
   async insert(data: Array<Record<string, unknown>>): Promise<void> {
-    await this.client.insert({
+    await this.getClient().insert({
       collection_name: env.milvusCollection,
       fields_data: data,
     });
@@ -90,14 +108,14 @@ export class MilvusManager {
   async query(filterExpr = '', outputFields: string[] = ['filename', 'file_type'], limit = 10000, offset = 0): Promise<any[]> {
     await this.ensureCollection();
     await this.ensureCollectionLoaded();
-    const response = await this.client.query({
+    const response = await this.getClient().query({
       collection_name: env.milvusCollection,
       expr: filterExpr,
       output_fields: outputFields,
       limit: Math.min(limit, QUERY_MAX_LIMIT),
       offset,
     });
-    return response?.data ?? response ?? [];
+    return (response?.data ?? response ?? []) as any[];
   }
 
   async queryAll(filterExpr = '', outputFields: string[] = ['filename', 'file_type']): Promise<any[]> {
@@ -126,6 +144,7 @@ export class MilvusManager {
         filename: entity.filename ?? '',
         text: entity.text ?? '',
         file_type: entity.file_type ?? '',
+        file_path: entity.file_path ?? '',
         page_number: entity.page_number ?? 0,
         chunk_id: entity.chunk_id ?? '',
         parent_chunk_id: entity.parent_chunk_id ?? '',
@@ -140,21 +159,11 @@ export class MilvusManager {
   async denseRetrieve(denseEmbedding: number[], topK = 5, filterExpr = ''): Promise<MilvusSearchResult> {
     await this.ensureCollection();
     await this.ensureCollectionLoaded();
-    const response = await this.client.search({
+    const response = await this.getClient().search({
       collection_name: env.milvusCollection,
       vector: denseEmbedding,
       anns_field: 'dense_embedding',
-      output_fields: [
-        'text',
-        'filename',
-        'file_type',
-        'page_number',
-        'chunk_id',
-        'parent_chunk_id',
-        'root_chunk_id',
-        'chunk_level',
-        'chunk_idx',
-      ],
+      output_fields: SEARCH_OUTPUT_FIELDS,
       limit: topK,
       expr: filterExpr,
       search_params: {
@@ -174,7 +183,7 @@ export class MilvusManager {
     try {
       await this.ensureCollection();
       await this.ensureCollectionLoaded();
-      const response = await this.client.hybridSearch({
+      const response = await this.getClient().hybridSearch({
         collection_name: env.milvusCollection,
         reqs: [
           {
@@ -194,17 +203,7 @@ export class MilvusManager {
         ],
         ranker: { strategy: 'rrf', params: { k: 60 } },
         limit: topK,
-        output_fields: [
-          'text',
-          'filename',
-          'file_type',
-          'page_number',
-          'chunk_id',
-          'parent_chunk_id',
-          'root_chunk_id',
-          'chunk_level',
-          'chunk_idx',
-        ],
+        output_fields: SEARCH_OUTPUT_FIELDS,
       });
       return this.normalizeHits(response);
     } catch {
@@ -213,7 +212,7 @@ export class MilvusManager {
   }
 
   async delete(filterExpr: string): Promise<any> {
-    return await this.client.deleteEntities({
+    return await this.getClient().deleteEntities({
       collection_name: env.milvusCollection,
       expr: filterExpr,
     });
@@ -225,7 +224,7 @@ export class MilvusManager {
       this.collectionLoaded = false;
       return;
     }
-    await this.client.dropCollection({
+    await this.getClient().dropCollection({
       collection_name: env.milvusCollection,
     });
     this.collectionLoaded = false;

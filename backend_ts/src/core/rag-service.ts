@@ -51,8 +51,8 @@ export class RagService {
     const prompt = [
       '你是一个文档相关性评估器。',
       '请只输出 JSON，例如 {"binary_score":"yes"} 或 {"binary_score":"no"}。',
-      `用户问题：${question}`,
       `检索内容：${context}`,
+      `用户问题：${question}`,
     ].join('\n\n');
 
     try {
@@ -283,6 +283,7 @@ export class RagService {
       'text',
       'filename',
       'file_type',
+      'file_path',
       'page_number',
       'chunk_id',
       'parent_chunk_id',
@@ -313,6 +314,7 @@ export class RagService {
           filename: String(row.filename ?? ''),
           text,
           file_type: String(row.file_type ?? ''),
+          file_path: String(row.file_path ?? ''),
           page_number: Number(row.page_number ?? 0),
           chunk_id: String(row.chunk_id ?? ''),
           parent_chunk_id: String(row.parent_chunk_id ?? ''),
@@ -331,32 +333,32 @@ export class RagService {
   async retrieveDocuments(query: string, topK = 5): Promise<{ docs: RetrievedChunk[]; meta: JsonObject }> {
     const candidateK = Math.max(topK * 3, topK);
     const filterExpr = `chunk_level == ${env.leafRetrieveLevel}`;
+    const runKeywordFallback = async (): Promise<{ docs: RetrievedChunk[]; meta: JsonObject }> => {
+      const fallbackDocs = await this.keywordFallbackRetrieve(query, topK);
+      // 兜底召回也走 rerank + auto-merge，保证 trace 字段与主链路一致。
+      const reranked = await this.rerankDocuments(query, fallbackDocs, topK);
+      const merged = await this.autoMergeDocuments(reranked.docs, topK);
+      return {
+        docs: merged.docs,
+        meta: {
+          ...reranked.meta,
+          ...merged.meta,
+          retrieval_mode: 'keyword_fallback',
+          candidate_k: candidateK,
+          leaf_retrieve_level: env.leafRetrieveLevel,
+        },
+      };
+    };
     try {
       await this.milvusManager.ensureCollection();
-      // 生成dense向量
+      // 将用户 query 转成 dense 向量（语义向量），用于 Milvus 的 dense_embedding 近邻检索召回候选。
       const denseEmbedding = (await this.embeddingService.getEmbeddings([query]))[0];
+      // 将同一个 query 转成 sparse 向量（BM25 风格稀疏向量），用于 sparse_embedding 关键词/词项召回。
       const sparseEmbedding = this.embeddingService.getSparseEmbedding(query);
+      // 进行 hybrid 检索：dense + sparse 两路召回后用 RRF 融合排序，得到候选集合（数量为 candidateK）。
       const retrieved = await this.milvusManager.hybridRetrieve(denseEmbedding, sparseEmbedding, candidateK, filterExpr);
       if (!retrieved.length) {
-        const fallbackDocs = await this.keywordFallbackRetrieve(query, topK);
-        return {
-          docs: fallbackDocs,
-          meta: {
-            rerank_enabled: Boolean(env.rerankModel && env.rerankApiKey && env.rerankBindingHost),
-            rerank_applied: false,
-            rerank_model: env.rerankModel || null,
-            rerank_endpoint: getRerankEndpoint() || null,
-            rerank_error: null,
-            retrieval_mode: 'keyword_fallback',
-            candidate_k: candidateK,
-            leaf_retrieve_level: env.leafRetrieveLevel,
-            auto_merge_enabled: false,
-            auto_merge_applied: false,
-            auto_merge_threshold: env.autoMergeThreshold,
-            auto_merge_replaced_chunks: 0,
-            auto_merge_steps: 0,
-          },
-        };
+        return runKeywordFallback();
       }
       const reranked = await this.rerankDocuments(query, retrieved, topK);
       const merged = await this.autoMergeDocuments(reranked.docs, topK);
@@ -375,25 +377,7 @@ export class RagService {
         const denseEmbedding = (await this.embeddingService.getEmbeddings([query]))[0];
         const retrieved = await this.milvusManager.denseRetrieve(denseEmbedding, candidateK, filterExpr);
         if (!retrieved.length) {
-          const fallbackDocs = await this.keywordFallbackRetrieve(query, topK);
-          return {
-            docs: fallbackDocs,
-            meta: {
-              rerank_enabled: Boolean(env.rerankModel && env.rerankApiKey && env.rerankBindingHost),
-              rerank_applied: false,
-              rerank_model: env.rerankModel || null,
-              rerank_endpoint: getRerankEndpoint() || null,
-              rerank_error: null,
-              retrieval_mode: 'keyword_fallback',
-              candidate_k: candidateK,
-              leaf_retrieve_level: env.leafRetrieveLevel,
-              auto_merge_enabled: false,
-              auto_merge_applied: false,
-              auto_merge_threshold: env.autoMergeThreshold,
-              auto_merge_replaced_chunks: 0,
-              auto_merge_steps: 0,
-            },
-          };
+          return runKeywordFallback();
         }
         const reranked = await this.rerankDocuments(query, retrieved, topK);
         const merged = await this.autoMergeDocuments(reranked.docs, topK);
@@ -447,6 +431,12 @@ export class RagService {
       '🧩',
       'Auto-merging 合并',
       `启用: ${Boolean(initial.meta.auto_merge_enabled)}，应用: ${Boolean(initial.meta.auto_merge_applied)}，替换片段: ${initial.meta.auto_merge_replaced_chunks ?? 0}`,
+    );
+    await this.emitStep(
+      emit,
+      '🧭',
+      '检索路径',
+      `模式: ${String(initial.meta.retrieval_mode ?? 'hybrid')}`,
     );
 
     // 初始化 RAG 追踪信息：先记录“初次检索”阶段的召回结果和元数据。
