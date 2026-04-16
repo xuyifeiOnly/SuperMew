@@ -23,6 +23,30 @@ const getRerankEndpoint = (): string => {
   return host.endsWith('/v1/rerank') ? host : `${host}/v1/rerank`;
 };
 
+const formatRerankError = (error: unknown): string => {
+  const raw = String(error ?? '').trim();
+  if (!raw) {
+    return 'Rerank 执行失败';
+  }
+  if (
+    raw.includes('Unable to connect') ||
+    raw.includes("Couldn't connect to server") ||
+    raw.includes('fetch failed')
+  ) {
+    return '已配置 Rerank，但当前后端无法连接到 Rerank 服务，请检查服务器网络、代理或目标地址是否可达';
+  }
+  if (raw === 'empty_rerank_results') {
+    return 'Rerank 服务已返回，但结果为空，已自动回退到原始召回顺序';
+  }
+  if (raw === 'retrieve_failed') {
+    return '前置检索失败，本轮未执行 Rerank';
+  }
+  if (raw.startsWith('HTTP ')) {
+    return `Rerank 服务请求失败：${raw}`;
+  }
+  return `Rerank 执行异常：${raw}`;
+};
+
 export class RagService {
   constructor(
     private readonly embeddingService: EmbeddingService,
@@ -165,7 +189,7 @@ export class RagService {
       });
       meta.rerank_applied = true;
       if (!response.ok) {
-        meta.rerank_error = `HTTP ${response.status}: ${await response.text()}`;
+        meta.rerank_error = formatRerankError(`HTTP ${response.status}: ${await response.text()}`);
         return { docs: docsWithRank.slice(0, topK), meta };
       }
       const payload = (await response.json()) as { results?: Array<{ index?: number; relevance_score?: number }> };
@@ -182,11 +206,13 @@ export class RagService {
         })
         .filter(Boolean) as RetrievedChunk[];
       if (!reranked.length) {
-        meta.rerank_error = 'empty_rerank_results';
+        meta.rerank_error = formatRerankError('empty_rerank_results');
       }
       return { docs: (reranked.length ? reranked : docsWithRank).slice(0, topK), meta };
     } catch (error) {
-      meta.rerank_error = error instanceof Error ? error.message : String(error);
+      meta.rerank_error = formatRerankError(
+        error instanceof Error ? error.message : String(error),
+      );
       return { docs: docsWithRank.slice(0, topK), meta };
     }
   }
@@ -414,7 +440,7 @@ export class RagService {
             rerank_applied: false,
             rerank_model: env.rerankModel || null,
             rerank_endpoint: getRerankEndpoint() || null,
-            rerank_error: 'retrieve_failed',
+            rerank_error: formatRerankError('retrieve_failed'),
             retrieval_mode: 'failed',
             candidate_k: candidateK,
             leaf_retrieve_level: env.leafRetrieveLevel,
