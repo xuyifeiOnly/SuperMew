@@ -21,6 +21,13 @@ export class MilvusManager {
   private client: MilvusClient | null = null;
   private collectionLoaded = false;
 
+  private formatError(error: unknown): string {
+    if (error instanceof Error) {
+      return `${error.name}: ${error.message}`;
+    }
+    return String(error);
+  }
+
   private getClient(): MilvusClient {
     if (!this.client) {
       this.client = new MilvusClient({
@@ -159,19 +166,28 @@ export class MilvusManager {
   async denseRetrieve(denseEmbedding: number[], topK = 5, filterExpr = ''): Promise<MilvusSearchResult> {
     await this.ensureCollection();
     await this.ensureCollectionLoaded();
-    const response = await this.getClient().search({
-      collection_name: env.milvusCollection,
-      vector: denseEmbedding,
-      anns_field: 'dense_embedding',
-      output_fields: SEARCH_OUTPUT_FIELDS,
-      limit: topK,
-      expr: filterExpr,
-      search_params: {
+    try {
+      const response = await this.getClient().search({
+        collection_name: env.milvusCollection,
+        data: denseEmbedding,
+        anns_field: 'dense_embedding',
+        output_fields: SEARCH_OUTPUT_FIELDS,
+        limit: topK,
+        expr: filterExpr,
         metric_type: 'IP',
-        params: JSON.stringify({ ef: 64 }),
-      },
-    });
-    return this.normalizeHits(response);
+        params: { ef: 64 },
+      });
+      const hits = this.normalizeHits(response);
+      if (!hits.length) {
+        console.warn(`[Milvus] dense search returned 0 hits. collection=${env.milvusCollection} topK=${topK} expr=${filterExpr || '<empty>'}`);
+      }
+      return hits;
+    } catch (error) {
+      console.error(
+        `[Milvus] dense search failed. collection=${env.milvusCollection} topK=${topK} expr=${filterExpr || '<empty>'} error=${this.formatError(error)}`,
+      );
+      throw error;
+    }
   }
 
   async hybridRetrieve(
@@ -185,28 +201,37 @@ export class MilvusManager {
       await this.ensureCollectionLoaded();
       const response = await this.getClient().hybridSearch({
         collection_name: env.milvusCollection,
-        reqs: [
+        data: [
           {
-            data: [denseEmbedding],
+            data: denseEmbedding,
             anns_field: 'dense_embedding',
             limit: topK * 2,
             expr: filterExpr,
-            param: { metric_type: 'IP', params: { ef: 64 } },
+            metric_type: 'IP',
+            params: { ef: 64 },
           },
           {
-            data: [sparseEmbedding],
+            data: sparseEmbedding,
             anns_field: 'sparse_embedding',
             limit: topK * 2,
             expr: filterExpr,
-            param: { metric_type: 'IP', params: { drop_ratio_search: 0.2 } },
+            metric_type: 'IP',
+            params: { drop_ratio_search: 0.2 },
           },
         ],
-        ranker: { strategy: 'rrf', params: { k: 60 } },
+        rerank: { strategy: 'rrf', params: { k: 60 } },
         limit: topK,
         output_fields: SEARCH_OUTPUT_FIELDS,
       });
-      return this.normalizeHits(response);
-    } catch {
+      const hits = this.normalizeHits(response);
+      if (!hits.length) {
+        console.warn(`[Milvus] hybrid search returned 0 hits. collection=${env.milvusCollection} topK=${topK} expr=${filterExpr || '<empty>'}`);
+      }
+      return hits;
+    } catch (error) {
+      console.error(
+        `[Milvus] hybrid search failed, falling back to dense search. collection=${env.milvusCollection} topK=${topK} expr=${filterExpr || '<empty>'} error=${this.formatError(error)}`,
+      );
       return this.denseRetrieve(denseEmbedding, topK, filterExpr);
     }
   }

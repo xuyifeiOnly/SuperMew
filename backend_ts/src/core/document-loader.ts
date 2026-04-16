@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import mammoth from 'mammoth';
 import pdfParse from 'pdf-parse';
+import WordExtractor from 'word-extractor';
 import XLSX from 'xlsx';
 import type { LoadedDocumentChunk } from '../types.js';
 import { normalizeText } from './shared.js';
@@ -157,6 +158,12 @@ export class DocumentLoaderService {
     return sections.join('\n\n');
   }
 
+  private async extractLegacyWordText(filePath: string, fileBuffer?: Buffer): Promise<string> {
+    const extractor = new WordExtractor();
+    const document = await extractor.extract(fileBuffer ?? filePath);
+    return normalizeText(document.getBody?.() ?? '');
+  }
+
   async loadDocument(filePath: string, filename: string, fileBuffer?: Buffer): Promise<LoadedDocumentChunk[]> {
     const lower = filename.toLowerCase();
     const buffer = fileBuffer ?? fs.readFileSync(filePath);
@@ -170,12 +177,19 @@ export class DocumentLoaderService {
         const parsed = await pdfParse(buffer);
         pages = [{ pageNumber: 1, text: parsed.text ?? '' }];
       }
-    } else if (lower.endsWith('.docx') || lower.endsWith('.doc')) {
+    } else if (lower.endsWith('.docx')) {
       fileType = 'Word';
       const result = await mammoth.extractRawText({ buffer });
       pages = this.splitTextByPageBreak(result.value ?? '');
       if (!pages.length) {
         pages = [{ pageNumber: 1, text: result.value ?? '' }];
+      }
+    } else if (lower.endsWith('.doc')) {
+      fileType = 'Word';
+      const text = await this.extractLegacyWordText(filePath, fileBuffer);
+      pages = this.splitTextByPageBreak(text);
+      if (!pages.length) {
+        pages = [{ pageNumber: 1, text }];
       }
     } else if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
       fileType = 'Excel';
