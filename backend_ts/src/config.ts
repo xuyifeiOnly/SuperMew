@@ -41,6 +41,7 @@ export const env = {
   nodeEnv: readString('NODE_ENV', 'development'),
   host: readString('HOST', '0.0.0.0'),
   port: readNumber('PORT', 9008),
+  embeddingBaseUrl: readString('EMBEDDING_BASE_URL', ''),
   databaseUrl: normalizeDatabaseUrl(readString('DATABASE_URL', 'postgres://postgres:postgres@localhost:5432/langchain_app')),
   redisUrl: readString('REDIS_URL', 'redis://localhost:6379/0'),
   redisKeyPrefix: readString('REDIS_KEY_PREFIX', 'supermew'),

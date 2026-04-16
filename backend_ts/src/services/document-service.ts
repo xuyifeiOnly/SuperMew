@@ -2,6 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { LoadedDocumentChunk } from '../types.js';
 import {
+  clearDocumentAccessRules,
+  deleteDocumentAccessRule,
+  listDocumentAccessRules,
+  parseAllowedRoles,
+  setDocumentAllowedRoles,
+} from '../core/document-access-control.js';
+import {
   documentLoader,
   embeddingService,
   HttpError,
@@ -38,7 +45,7 @@ const splitDocumentsByLevel = (documents: LoadedDocumentChunk[]) => {
   return { parentDocs, leafDocs };
 };
 
-const replaceStoredDocument = async (filename: string, documents: LoadedDocumentChunk[]) => {
+const replaceStoredDocument = async (filename: string, documents: LoadedDocumentChunk[], allowedRoles: string[]) => {
   const deleteExpr = `filename == "${quoteMilvusString(filename)}"`;
   try {
     await removeBm25StatsForFilename(filename);
@@ -57,6 +64,7 @@ const replaceStoredDocument = async (filename: string, documents: LoadedDocument
 
   await parentChunkStore.upsertDocuments(parentDocs);
   await milvusWriter.writeDocuments(leafDocs);
+  await setDocumentAllowedRoles(filename, allowedRoles);
 
   return {
     filename,
@@ -65,11 +73,12 @@ const replaceStoredDocument = async (filename: string, documents: LoadedDocument
   };
 };
 
-export const listDocuments = async (): Promise<Array<{ filename: string; file_type: string; chunk_count: number }>> => {
+export const listDocuments = async (): Promise<Array<{ filename: string; file_type: string; chunk_count: number; allowed_roles: string[] }>> => {
   await milvusManager.ensureCollection();
   const results = await milvusManager.query('', ['filename', 'file_type'], 10000);
+  const accessRules = new Map((await listDocumentAccessRules()).map((item) => [item.filename, item.allowed_roles]));
 
-  const fileStats = new Map<string, { filename: string; file_type: string; chunk_count: number }>();
+  const fileStats = new Map<string, { filename: string; file_type: string; chunk_count: number; allowed_roles: string[] }>();
   for (const item of results) {
     const filename = String(item.filename ?? '');
     const fileType = String(item.file_type ?? '');
@@ -81,6 +90,7 @@ export const listDocuments = async (): Promise<Array<{ filename: string; file_ty
       filename,
       file_type: fileType,
       chunk_count: 0,
+      allowed_roles: accessRules.get(filename) ?? [],
     };
     current.chunk_count += 1;
     fileStats.set(filename, current);
@@ -89,12 +99,13 @@ export const listDocuments = async (): Promise<Array<{ filename: string; file_ty
   return [...fileStats.values()];
 };
 
-export const uploadDocument = async (file?: UploadedDocumentFile) => {
+export const uploadDocument = async (file?: UploadedDocumentFile, allowedRolesInput?: unknown) => {
   if (!file) {
     throw new HttpError(400, '缺少上传文件');
   }
 
   const filename = ensureSupportedFilename(String(file.originalname || ''));
+  const allowedRoles = parseAllowedRoles(allowedRolesInput);
   fs.mkdirSync(uploadDir, { recursive: true });
   await milvusManager.ensureCollection();
 
@@ -110,21 +121,23 @@ export const uploadDocument = async (file?: UploadedDocumentFile) => {
   if (!documents.length) {
     throw new HttpError(500, '文档处理失败，未能提取内容');
   }
-  const result = await replaceStoredDocument(filename, documents);
+  const result = await replaceStoredDocument(filename, documents, allowedRoles);
 
   return {
     filename,
+    allowed_roles: allowedRoles,
     chunks_processed: result.leafChunkCount,
     parent_chunks_processed: result.parentChunkCount,
     message: `成功上传并处理 ${filename}，叶子分块 ${result.leafChunkCount} 个，父级分块 ${result.parentChunkCount} 个（存入 PostgreSQL）`,
   };
 };
 
-export const importDocumentsFromFolder = async (rawFolderPath: string) => {
+export const importDocumentsFromFolder = async (rawFolderPath: string, allowedRolesInput?: unknown) => {
   const inputFolderPath = String(rawFolderPath ?? '').trim();
   if (!inputFolderPath) {
     throw new HttpError(400, '目录路径不能为空');
   }
+  const allowedRoles = parseAllowedRoles(allowedRolesInput);
   const folderPath = path.resolve(inputFolderPath);
   if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
     throw new HttpError(400, `目录不存在: ${folderPath}`);
@@ -169,7 +182,7 @@ export const importDocumentsFromFolder = async (rawFolderPath: string) => {
       ...doc,
       file_path: targetPath,
     }));
-    const result = await replaceStoredDocument(filename, normalizedDocuments);
+    const result = await replaceStoredDocument(filename, normalizedDocuments, allowedRoles);
     imported.push({
       filename,
       leaf_chunks: result.leafChunkCount,
@@ -179,6 +192,7 @@ export const importDocumentsFromFolder = async (rawFolderPath: string) => {
 
   return {
     folder_path: folderPath,
+    allowed_roles: allowedRoles,
     imported_count: imported.length,
     skipped_count: skipped.length,
     imported,
@@ -198,6 +212,7 @@ export const deleteDocument = async (rawFilename: string) => {
   const deleteExpr = `filename == "${quoteMilvusString(filename)}"`;
   const result = await milvusManager.delete(deleteExpr);
   await parentChunkStore.deleteByFilename(filename);
+  await deleteDocumentAccessRule(filename);
 
   return {
     filename,
@@ -209,10 +224,12 @@ export const deleteDocument = async (rawFilename: string) => {
 export const resetDocumentCollection = async () => {
   await milvusManager.dropCollection();
   const parentChunkCount = await parentChunkStore.deleteAll();
+  const accessRuleCount = await clearDocumentAccessRules();
   embeddingService.resetCorpusStats();
 
   return {
     parent_chunks_deleted: parentChunkCount,
-    message: '已清空 Milvus collection、父块存储和 BM25 统计状态',
+    document_access_rules_deleted: accessRuleCount,
+    message: '已清空 Milvus collection、父块存储、文档访问规则和 BM25 统计状态',
   };
 };

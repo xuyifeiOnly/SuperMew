@@ -19,7 +19,7 @@ export const requireUser = async (ctx: AppContext) => {
 
 export const requireAdmin = async (ctx: AppContext) => {
   const currentUser = await requireUser(ctx);
-  if (currentUser.role !== 'admin') {
+  if (!currentUser.roles.includes('admin')) {
     throw new HttpError(403, '管理员权限不足');
   }
   return currentUser;

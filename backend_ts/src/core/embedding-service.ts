@@ -114,7 +114,7 @@ export class EmbeddingService {
     if (!texts.length) {
       return [];
     }
-    if (env.embeddingProvider === 'openai' && env.embeddingModel) {
+    if (env.embeddingProvider === 'glm' && env.embeddingModel) {
       try {
         return await this.getRemoteEmbeddings(texts);
       } catch {

@@ -1,9 +1,10 @@
-export type Role = 'user' | 'admin';
+export type Role = string;
 
 export interface CurrentUser {
   id: number;
   username: string;
   role: Role;
+  roles: Role[];
 }
 
 export interface RetrievedChunk {
@@ -50,6 +51,10 @@ export interface RagTrace {
   auto_merge_threshold?: number | null;
   auto_merge_replaced_chunks?: number | null;
   auto_merge_steps?: number | null;
+  current_role?: string | null;
+  current_roles?: string[] | null;
+  access_scope?: string | null;
+  restricted_file_count?: number | null;
   initial_retrieved_chunks?: RetrievedChunk[] | null;
   expanded_retrieved_chunks?: RetrievedChunk[] | null;
   retrieved_chunks?: RetrievedChunk[] | null;

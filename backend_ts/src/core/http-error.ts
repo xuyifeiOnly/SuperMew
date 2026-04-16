@@ -2,8 +2,8 @@ import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { env } from '../config.js';
-import { User } from '../models.js';
-import type { CurrentUser } from '../types.js';
+import { User, UserRoleBinding } from '../models.js';
+import type { CurrentUser, Role } from '../types.js';
 
 export class HttpError extends Error {
   status: number;
@@ -60,15 +60,51 @@ export const createAccessToken = (username: string, role: string): string =>
     expiresIn: `${env.jwtExpireMinutes}m`,
   });
 
-export const resolveRole = (requestedRole?: string | null, adminCode?: string | null): 'user' | 'admin' => {
-  const role = normalizeText(requestedRole || 'user').toLowerCase();
-  if (role !== 'admin') {
-    return 'user';
+const normalizeRole = (value: unknown): Role => normalizeText(value).toLowerCase();
+
+export const parseRolesInput = (value: unknown): Role[] => {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map(normalizeRole).filter(Boolean))];
   }
-  if (env.adminInviteCode && adminCode === env.adminInviteCode) {
-    return 'admin';
+
+  const raw = normalizeText(value);
+  if (!raw) {
+    return [];
   }
-  throw new HttpError(403, '管理员邀请码错误');
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return [...new Set(parsed.map(normalizeRole).filter(Boolean))];
+    }
+  } catch {}
+
+  return [...new Set(raw.split(/[,\n，]/).map(normalizeRole).filter(Boolean))];
+};
+
+export const resolveRoles = (requestedRoles?: unknown, adminCode?: string | null): Role[] => {
+  const roles = parseRolesInput(requestedRoles);
+  const normalizedRoles = roles.length ? roles : ['user'];
+  if (normalizedRoles.includes('admin')) {
+    if (env.adminInviteCode && adminCode === env.adminInviteCode) {
+      return normalizedRoles;
+    }
+    throw new HttpError(403, '管理员邀请码错误');
+  }
+  return normalizedRoles;
+};
+
+const parseStoredRoles = (primaryRole: string, bindingRoles: string[]): Role[] => {
+  const roles = [...new Set([primaryRole, ...bindingRoles].map(normalizeRole).filter(Boolean))];
+  return roles.length ? roles : ['user'];
+};
+
+export const setUserRoles = async (userId: number, roles: Role[]): Promise<void> => {
+  await UserRoleBinding.destroy({ where: { userId } });
+  if (!roles.length) {
+    return;
+  }
+  await UserRoleBinding.bulkCreate(roles.map((role) => ({ userId, role })));
 };
 
 export const getCurrentUserByToken = async (token: string): Promise<CurrentUser> => {
@@ -87,10 +123,18 @@ export const getCurrentUserByToken = async (token: string): Promise<CurrentUser>
       throw new HttpError(401, '无效或过期的认证令牌');
     }
 
+    const bindings = await UserRoleBinding.findAll({
+      where: { userId: user.id },
+      attributes: ['role'],
+      raw: true,
+    });
+    const roles = parseStoredRoles(String(user.role || 'user'), bindings.map((item) => String(item.role ?? '')));
+
     return {
       id: user.id,
       username: user.username,
-      role: user.role as 'user' | 'admin',
+      role: roles[0],
+      roles,
     };
   } catch (error) {
     if (error instanceof HttpError) {

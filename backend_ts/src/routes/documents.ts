@@ -25,13 +25,14 @@ router.get('/documents', async (ctx) => {
 router.post('/documents/upload', upload.single('file'), async (ctx) => {
   await requireAdmin(ctx);
   const file = (ctx.request as { file?: UploadedDocumentFile }).file;
-  ctx.body = await uploadDocument(file);
+  const body = (ctx.request as { body?: { allowed_roles?: unknown } }).body;
+  ctx.body = await uploadDocument(file, body?.allowed_roles);
 });
 
 router.post('/documents/import-folder', async (ctx) => {
   await requireAdmin(ctx);
-  const body = (ctx.request as { body?: { folderPath?: string } }).body;
-  ctx.body = await importDocumentsFromFolder(String(body?.folderPath ?? ''));
+  const body = (ctx.request as { body?: { folderPath?: string; allowed_roles?: unknown } }).body;
+  ctx.body = await importDocumentsFromFolder(String(body?.folderPath ?? ''), body?.allowed_roles);
 });
 
 router.delete('/documents/:filename', async (ctx) => {

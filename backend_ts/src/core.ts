@@ -11,7 +11,8 @@ import {
   getCurrentUserByToken,
   hashPassword,
   HttpError,
-  resolveRole,
+  resolveRoles,
+  setUserRoles,
   verifyPassword,
 } from './core/http-error.js';
 import { MilvusManager } from './core/milvus-manager.js';
@@ -38,7 +39,8 @@ export {
   MilvusWriter,
   ParentChunkStore,
   RagService,
-  resolveRole,
+  resolveRoles,
+  setUserRoles,
   verifyPassword,
 };
 

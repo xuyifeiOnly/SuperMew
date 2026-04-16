@@ -39,7 +39,7 @@ export const parseChatRequest = (body: unknown): ChatRequest => {
 export const runChat = async (currentUser: CurrentUser, body: unknown) => {
   const request = parseChatRequest(body);
   try {
-    return await chatAgentService.chat(request.message, currentUser.username, request.sessionId);
+    return await chatAgentService.chat(request.message, currentUser.username, request.sessionId, currentUser.roles);
   } catch (error) {
     mapChatError(error);
   }
@@ -47,5 +47,5 @@ export const runChat = async (currentUser: CurrentUser, body: unknown) => {
 
 export const createChatStream = (currentUser: CurrentUser, body: unknown): AsyncIterable<StreamEvent> => {
   const request = parseChatRequest(body);
-  return chatAgentService.chatStream(request.message, currentUser.username, request.sessionId);
+  return chatAgentService.chatStream(request.message, currentUser.username, request.sessionId, currentUser.roles);
 };

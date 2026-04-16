@@ -94,7 +94,7 @@ export const createEmbeddingModel = (model: string): OpenAIEmbeddings | null => 
     model,
     apiKey: env.arkApiKey,
     configuration: {
-      baseURL: env.baseUrl,
+      baseURL: env.embeddingBaseUrl,
     },
   });
 };

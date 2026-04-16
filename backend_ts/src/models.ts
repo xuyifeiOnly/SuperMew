@@ -38,6 +38,33 @@ User.init(
   },
 );
 
+export class UserRoleBinding extends Model<InferAttributes<UserRoleBinding>, InferCreationAttributes<UserRoleBinding>> {
+  declare id: CreationOptional<number>;
+  declare userId: number;
+  declare role: string;
+  declare createdAt: CreationOptional<Date>;
+}
+
+UserRoleBinding.init(
+  {
+    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    userId: { type: DataTypes.INTEGER, allowNull: false, field: 'user_id' },
+    role: { type: DataTypes.STRING(50), allowNull: false },
+    createdAt: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW, field: 'created_at' },
+  },
+  {
+    sequelize,
+    modelName: 'UserRoleBinding',
+    tableName: 'user_role_bindings',
+    underscored: true,
+    timestamps: false,
+    indexes: [
+      { fields: ['user_id'] },
+      { unique: true, fields: ['user_id', 'role'] },
+    ],
+  },
+);
+
 export class ChatSession extends Model<InferAttributes<ChatSession>, InferCreationAttributes<ChatSession>> {
   declare id: CreationOptional<number>;
   declare userId: number;
@@ -136,7 +163,30 @@ ParentChunk.init(
   },
 );
 
+export class DocumentAccessControl extends Model<InferAttributes<DocumentAccessControl>, InferCreationAttributes<DocumentAccessControl>> {
+  declare filename: string;
+  declare allowedRoles: string[];
+  declare updatedAt: CreationOptional<Date>;
+}
+
+DocumentAccessControl.init(
+  {
+    filename: { type: DataTypes.STRING(255), primaryKey: true },
+    allowedRoles: { type: DataTypes.JSONB, allowNull: false, defaultValue: [], field: 'allowed_roles' },
+    updatedAt: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW, field: 'updated_at' },
+  },
+  {
+    sequelize,
+    modelName: 'DocumentAccessControl',
+    tableName: 'document_access_controls',
+    underscored: true,
+    timestamps: false,
+  },
+);
+
 User.hasMany(ChatSession, { foreignKey: 'user_id', as: 'sessions', onDelete: 'CASCADE' });
+User.hasMany(UserRoleBinding, { foreignKey: 'user_id', as: 'roleBindings', onDelete: 'CASCADE' });
+UserRoleBinding.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 ChatSession.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 ChatSession.hasMany(ChatMessage, { foreignKey: 'session_ref_id', as: 'messages', onDelete: 'CASCADE' });
 ChatMessage.belongsTo(ChatSession, { foreignKey: 'session_ref_id', as: 'session' });

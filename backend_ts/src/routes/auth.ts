@@ -2,9 +2,11 @@ import Router from '@koa/router';
 import {
   authenticateUser,
   createAccessToken,
+  getCurrentUserByToken,
   hashPassword,
   HttpError,
-  resolveRole,
+  resolveRoles,
+  setUserRoles,
 } from '../core/http-error.js';
 import { requireUser } from '../middleware/index.js';
 import { User } from '../models.js';
@@ -16,7 +18,7 @@ const router = new Router<AppState>();
 const registerSchema = z.object({
   username: z.string().trim().min(1, '用户名不能为空'),
   password: z.string().trim().min(1, '密码不能为空'),
-  role: z.string().optional().default('user'),
+  roles: z.union([z.array(z.string()), z.string()]).optional(),
   admin_code: z.string().optional().nullable(),
 });
 
@@ -32,18 +34,20 @@ router.post('/auth/register', async (ctx) => {
     throw new HttpError(409, '用户名已存在');
   }
 
-  const role = resolveRole(payload.role, payload.admin_code);
+  const roles = resolveRoles(payload.roles, payload.admin_code);
   const user = await User.create({
     username: payload.username,
     passwordHash: hashPassword(payload.password),
-    role,
+    role: roles[0],
   });
+  await setUserRoles(user.id, roles);
 
   ctx.body = {
-    access_token: createAccessToken(user.username, role),
+    access_token: createAccessToken(user.username, roles[0]),
     token_type: 'bearer',
     username: user.username,
-    role: user.role,
+    role: roles[0],
+    roles,
   };
 });
 
@@ -53,12 +57,15 @@ router.post('/auth/login', async (ctx) => {
   if (!user) {
     throw new HttpError(401, '用户名或密码错误');
   }
+  const accessToken = createAccessToken(user.username, user.role);
+  const currentUser = await getCurrentUserByToken(accessToken);
 
   ctx.body = {
-    access_token: createAccessToken(user.username, user.role),
+    access_token: accessToken,
     token_type: 'bearer',
     username: user.username,
-    role: user.role,
+    role: currentUser.role,
+    roles: currentUser.roles,
   };
 });
 
@@ -67,6 +74,7 @@ router.get('/auth/me', async (ctx) => {
   ctx.body = {
     username: currentUser.username,
     role: currentUser.role,
+    roles: currentUser.roles,
   };
 });
 

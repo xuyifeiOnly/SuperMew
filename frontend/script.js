@@ -70,6 +70,13 @@ createApp({
             return div.innerHTML;
         },
 
+        renderMessageHtml(message) {
+            if (!message) return;
+            message.html = message.isUser
+                ? this.escapeHtml(message.text || '')
+                : this.parseMarkdown(message.text || '');
+        },
+
         authHeaders(extra = {}) {
             const headers = { ...extra };
             if (this.token) {
@@ -185,10 +192,12 @@ createApp({
             const text = this.userInput.trim();
             if (!text || this.isLoading || this.isComposing) return;
 
-            this.messages.push({
+            const userMessage = {
                 text: text,
-                isUser: true
-            });
+                isUser: true,
+                html: this.escapeHtml(text)
+            };
+            this.messages.push(userMessage);
 
             this.userInput = '';
             this.$nextTick(() => {
@@ -202,7 +211,8 @@ createApp({
                 isUser: false,
                 isThinking: true,
                 ragTrace: null,
-                ragSteps: []
+                ragSteps: [],
+                html: ''
             });
             const botMsgIdx = this.messages.length - 1;
 
@@ -246,6 +256,7 @@ createApp({
                                         this.messages[botMsgIdx].isThinking = false;
                                     }
                                     this.messages[botMsgIdx].text += data.content;
+                                    this.renderMessageHtml(this.messages[botMsgIdx]);
                                 } else if (data.type === 'trace') {
                                     this.messages[botMsgIdx].ragTrace = data.rag_trace;
                                 } else if (data.type === 'rag_step') {
@@ -256,6 +267,7 @@ createApp({
                                 } else if (data.type === 'error') {
                                     this.messages[botMsgIdx].isThinking = false;
                                     this.messages[botMsgIdx].text += `\n[Error: ${data.content}]`;
+                                    this.renderMessageHtml(this.messages[botMsgIdx]);
                                 }
                             } catch (e) {
                                 console.warn('SSE parse error:', e);
@@ -273,9 +285,11 @@ createApp({
                     } else {
                         this.messages[botMsgIdx].text += '\n\n_(回答已被终止)_';
                     }
+                    this.renderMessageHtml(this.messages[botMsgIdx]);
                 } else {
                     this.messages[botMsgIdx].isThinking = false;
                     this.messages[botMsgIdx].text = `喵呜... 出了点问题：${error.message}`;
+                    this.renderMessageHtml(this.messages[botMsgIdx]);
                 }
             } finally {
                 this.isLoading = false;
@@ -346,7 +360,8 @@ createApp({
                 this.messages = data.messages.map(msg => ({
                     text: msg.content,
                     isUser: msg.type === 'human',
-                    ragTrace: msg.rag_trace || null
+                    ragTrace: msg.rag_trace || null,
+                    html: msg.type === 'human' ? this.escapeHtml(msg.content) : this.parseMarkdown(msg.content)
                 }));
 
                 this.$nextTick(() => {

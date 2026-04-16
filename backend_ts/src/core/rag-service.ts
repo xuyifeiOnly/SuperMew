@@ -1,6 +1,7 @@
 import { env } from '../config.js';
-import type { RagTrace, RetrievedChunk } from '../types.js';
+import type { RagTrace, RetrievedChunk, Role } from '../types.js';
 import { z } from 'zod';
+import { buildAccessibleFilterExpr } from './document-access-control.js';
 import { EmbeddingService } from './embedding-service.js';
 import { MilvusManager } from './milvus-manager.js';
 import { ParentChunkStore } from './parent-chunk-store.js';
@@ -273,13 +274,13 @@ export class RagService {
     };
   }
 
-  private async keywordFallbackRetrieve(query: string, topK: number): Promise<RetrievedChunk[]> {
+  private async keywordFallbackRetrieve(query: string, topK: number, filterExpr: string): Promise<RetrievedChunk[]> {
     const queryTokens = [...new Set(tokenize(query))];
     if (!queryTokens.length) {
       return [];
     }
 
-    const rows = await this.milvusManager.queryAll(`chunk_level == ${env.leafRetrieveLevel}`, [
+    const rows = await this.milvusManager.queryAll(filterExpr, [
       'text',
       'filename',
       'file_type',
@@ -330,11 +331,13 @@ export class RagService {
     return scored.slice(0, topK);
   }
 
-  async retrieveDocuments(query: string, topK = 5): Promise<{ docs: RetrievedChunk[]; meta: JsonObject }> {
+  async retrieveDocuments(query: string, topK = 5, userRoles: Role[] = ['user']): Promise<{ docs: RetrievedChunk[]; meta: JsonObject }> {
     const candidateK = Math.max(topK * 3, topK);
-    const filterExpr = `chunk_level == ${env.leafRetrieveLevel}`;
+    const effectiveRoles = userRoles.length ? userRoles : ['user'];
+    const accessFilter = await buildAccessibleFilterExpr(effectiveRoles, `chunk_level == ${env.leafRetrieveLevel}`);
+    const filterExpr = accessFilter.filterExpr;
     const runKeywordFallback = async (): Promise<{ docs: RetrievedChunk[]; meta: JsonObject }> => {
-      const fallbackDocs = await this.keywordFallbackRetrieve(query, topK);
+      const fallbackDocs = await this.keywordFallbackRetrieve(query, topK, filterExpr);
       // 兜底召回也走 rerank + auto-merge，保证 trace 字段与主链路一致。
       const reranked = await this.rerankDocuments(query, fallbackDocs, topK);
       const merged = await this.autoMergeDocuments(reranked.docs, topK);
@@ -346,6 +349,10 @@ export class RagService {
           retrieval_mode: 'keyword_fallback',
           candidate_k: candidateK,
           leaf_retrieve_level: env.leafRetrieveLevel,
+          current_role: effectiveRoles[0],
+          current_roles: effectiveRoles,
+          access_scope: accessFilter.accessScope,
+          restricted_file_count: accessFilter.restrictedFileCount,
         },
       };
     };
@@ -370,6 +377,10 @@ export class RagService {
           retrieval_mode: 'hybrid',
           candidate_k: candidateK,
           leaf_retrieve_level: env.leafRetrieveLevel,
+          current_role: effectiveRoles[0],
+          current_roles: effectiveRoles,
+          access_scope: accessFilter.accessScope,
+          restricted_file_count: accessFilter.restrictedFileCount,
         },
       };
     } catch {
@@ -389,6 +400,10 @@ export class RagService {
             retrieval_mode: 'dense_fallback',
             candidate_k: candidateK,
             leaf_retrieve_level: env.leafRetrieveLevel,
+            current_role: effectiveRoles[0],
+            current_roles: effectiveRoles,
+            access_scope: accessFilter.accessScope,
+            restricted_file_count: accessFilter.restrictedFileCount,
           },
         };
       } catch {
@@ -403,6 +418,10 @@ export class RagService {
             retrieval_mode: 'failed',
             candidate_k: candidateK,
             leaf_retrieve_level: env.leafRetrieveLevel,
+            current_role: effectiveRoles[0],
+            current_roles: effectiveRoles,
+            access_scope: accessFilter.accessScope,
+            restricted_file_count: accessFilter.restrictedFileCount,
             auto_merge_enabled: env.autoMergeEnabled,
             auto_merge_applied: false,
             auto_merge_threshold: env.autoMergeThreshold,
@@ -414,10 +433,11 @@ export class RagService {
     }
   }
 
-  async searchKnowledgeBase(query: string, emit?: EmitStep): Promise<{ text: string; ragTrace: RagTrace }> {
+  async searchKnowledgeBase(query: string, userRoles: Role[] = ['user'], emit?: EmitStep): Promise<{ text: string; ragTrace: RagTrace }> {
     // 阶段 1：先用原始 query 做一次基础检索，并把关键过程通过 emit 输出给前端。
     await this.emitStep(emit, '🔍', '正在检索知识库...', `查询: ${query.slice(0, 50)}`);
-    const initial = await this.retrieveDocuments(query, 5);
+    const effectiveRoles = userRoles.length ? userRoles : ['user'];
+    const initial = await this.retrieveDocuments(query, 5, effectiveRoles);
     const initialDocs = initial.docs;
     const initialContext = formatDocs(initialDocs);
     await this.emitStep(
@@ -438,6 +458,12 @@ export class RagService {
       '检索路径',
       `模式: ${String(initial.meta.retrieval_mode ?? 'hybrid')}`,
     );
+    await this.emitStep(
+      emit,
+      '🔐',
+      '文档权限过滤',
+      `角色: ${(initial.meta.current_roles as string[] | undefined)?.join(', ') || effectiveRoles.join(', ')}，模式: ${String(initial.meta.access_scope ?? 'all')}，排除文档数: ${Number(initial.meta.restricted_file_count ?? 0)}`,
+    );
 
     // 初始化 RAG 追踪信息：先记录“初次检索”阶段的召回结果和元数据。
     let ragTrace: RagTrace = {
@@ -456,6 +482,10 @@ export class RagService {
       retrieval_mode: String(initial.meta.retrieval_mode ?? 'hybrid'),
       candidate_k: Number(initial.meta.candidate_k ?? 0),
       leaf_retrieve_level: Number(initial.meta.leaf_retrieve_level ?? 3),
+      current_role: String(initial.meta.current_role ?? effectiveRoles[0]),
+      current_roles: ((initial.meta.current_roles as string[] | undefined) ?? effectiveRoles),
+      access_scope: String(initial.meta.access_scope ?? 'all'),
+      restricted_file_count: Number(initial.meta.restricted_file_count ?? 0),
       auto_merge_enabled: Boolean(initial.meta.auto_merge_enabled),
       auto_merge_applied: Boolean(initial.meta.auto_merge_applied),
       auto_merge_threshold: Number(initial.meta.auto_merge_threshold ?? env.autoMergeThreshold),
@@ -517,10 +547,14 @@ export class RagService {
     let rerankEnabled = false;
     let rerankModel = '';
     let rerankEndpoint = '';
+    let currentRole = String(initial.meta.current_role ?? effectiveRoles[0]);
+    let currentRoles = ((initial.meta.current_roles as string[] | undefined) ?? effectiveRoles);
+    let accessScope = String(initial.meta.access_scope ?? 'all');
+    let restrictedFileCount = Number(initial.meta.restricted_file_count ?? 0);
 
     // 按策略执行检索并汇总结果，同时累计 rerank/merge 等可观测元数据。
     const collect = async (sourceQuery: string, label: string): Promise<void> => {
-      const response = await this.retrieveDocuments(sourceQuery, 5);
+      const response = await this.retrieveDocuments(sourceQuery, 5, effectiveRoles);
       mergedDocs.push(...response.docs);
       retrievalMode = retrievalMode || String(response.meta.retrieval_mode ?? '');
       candidateK = candidateK || Number(response.meta.candidate_k ?? 0);
@@ -534,6 +568,10 @@ export class RagService {
       rerankEnabled = rerankEnabled || Boolean(response.meta.rerank_enabled);
       rerankModel = rerankModel || String(response.meta.rerank_model ?? '');
       rerankEndpoint = rerankEndpoint || String(response.meta.rerank_endpoint ?? '');
+      currentRole = String(response.meta.current_role ?? currentRole);
+      currentRoles = ((response.meta.current_roles as string[] | undefined) ?? currentRoles);
+      accessScope = String(response.meta.access_scope ?? accessScope);
+      restrictedFileCount = Math.max(restrictedFileCount, Number(response.meta.restricted_file_count ?? 0));
       if (response.meta.rerank_error) {
         rerankErrors.push(`${label}:${String(response.meta.rerank_error)}`);
       }
@@ -588,6 +626,10 @@ export class RagService {
       retrieval_mode: retrievalMode,
       candidate_k: candidateK,
       leaf_retrieve_level: leafRetrieveLevel,
+      current_role: currentRole,
+      current_roles: currentRoles,
+      access_scope: accessScope,
+      restricted_file_count: restrictedFileCount,
       auto_merge_enabled: autoMergeEnabled,
       auto_merge_applied: autoMergeApplied,
       auto_merge_threshold: autoMergeThreshold,

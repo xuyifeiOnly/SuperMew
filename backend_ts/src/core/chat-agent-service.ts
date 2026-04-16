@@ -2,7 +2,7 @@ import { AsyncQueue } from "./async-queue.js";
 import { ConversationStorage } from "./conversation-storage.js";
 import { RagService } from "./rag-service.js";
 import { getCurrentWeather } from "./weather.js";
-import type { RagTrace, StreamEvent } from "../types.js";
+import type { RagTrace, Role, StreamEvent } from "../types.js";
 import { z } from "zod";
 import { createAgent } from "langchain";
 import { tool } from "langchain/tools";
@@ -101,7 +101,10 @@ export class ChatAgentService {
     if (!emit || !content) {
       return;
     }
-    const pieces = content.match(/.{1,24}/g) ?? [content];
+    const pieces: string[] = [];
+    for (let index = 0; index < content.length; index += 24) {
+      pieces.push(content.slice(index, index + 24));
+    }
     for (const piece of pieces) {
       await emit({ type: "content", content: piece });
     }
@@ -110,6 +113,7 @@ export class ChatAgentService {
   private createAgentTools(
     emit: EmitEvent | undefined,
     ragTraceRef: { value: RagTrace | null },
+    userRoles: Role[],
   ): Array<ReturnType<typeof tool>> {
     let knowledgeCalls = 0;
     const weatherTool = tool(
@@ -135,6 +139,7 @@ export class ChatAgentService {
         }
         const ragResult = await this.ragService.searchKnowledgeBase(
           normalizeText(query),
+          userRoles,
           async (step) => {
             await emit?.({ type: "rag_step", step });
           },
@@ -155,6 +160,7 @@ export class ChatAgentService {
 
   private async invokeAgent(
     messages: BaseMessage[],
+    userRoles: Role[],
     emit?: EmitEvent,
   ): Promise<{ response: string; ragTrace: RagTrace | null }> {
     const llm = createChatModel(env.model, 0.3);
@@ -167,7 +173,7 @@ export class ChatAgentService {
     const ragTraceRef: { value: RagTrace | null } = { value: null };
     const agent = createAgent({
       model: llm,
-      tools: this.createAgentTools(emit, ragTraceRef),
+      tools: this.createAgentTools(emit, ragTraceRef, userRoles),
       systemPrompt: this.systemPrompt(),
     });
 
@@ -188,6 +194,7 @@ export class ChatAgentService {
     userText: string,
     userId: string,
     sessionId: string,
+    userRoles: Role[],
     emit?: EmitEvent,
   ): Promise<{ response: string; ragTrace: RagTrace | null }> {
     const history = await this.storage.load(userId, sessionId);
@@ -205,7 +212,7 @@ export class ChatAgentService {
     messages = [...messages, { type: "human", content: userText }];
     const baseMessages = this.toAgentMessages(messages);
     
-    const agentResult = await this.invokeAgent(baseMessages, emit);
+    const agentResult = await this.invokeAgent(baseMessages, userRoles, emit);
     const finalResponse = agentResult.response;
     const ragTrace = agentResult.ragTrace;
 
@@ -226,8 +233,9 @@ export class ChatAgentService {
     userText: string,
     userId: string,
     sessionId: string,
+    userRoles: Role[],
   ): Promise<{ response: string; rag_trace: RagTrace | null }> {
-    const result = await this.runConversation(userText, userId, sessionId);
+    const result = await this.runConversation(userText, userId, sessionId, userRoles);
     return {
       response: result.response,
       rag_trace: result.ragTrace,
@@ -238,9 +246,10 @@ export class ChatAgentService {
     userText: string,
     userId: string,
     sessionId: string,
+    userRoles: Role[],
   ): AsyncIterable<StreamEvent> {
     const queue = new AsyncQueue<StreamEvent>();
-    void this.runConversation(userText, userId, sessionId, async (event) => {
+    void this.runConversation(userText, userId, sessionId, userRoles, async (event) => {
       queue.push(event);
     })
       .catch((error) => {
