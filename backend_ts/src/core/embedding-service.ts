@@ -109,7 +109,7 @@ export class EmbeddingService {
     }
     return embedByModel(texts, env.embeddingModel);
   }
-
+  // 稠密向量 / Dense Embedding（语义向量）
   async getEmbeddings(texts: string[]): Promise<number[][]> {
     if (!texts.length) {
       return [];
@@ -123,7 +123,7 @@ export class EmbeddingService {
     }
     return texts.map((text) => hashTextToVector(text, env.denseEmbeddingDim));
   }
-
+  // 稀疏向量 / Sparse Embedding（关键词权重向量，BM25 风格）
   getSparseEmbedding(text: string): Record<number, number> {
     const tokens = tokenize(text);
     const tf = new Map<string, number>();

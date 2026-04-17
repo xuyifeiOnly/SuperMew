@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { ChatOpenAI, OpenAIEmbeddings } from '@langchain/openai';
+import nodejieba from 'nodejieba';
 import { env } from '../config.js';
 import type { RagStep, StreamEvent } from '../types.js';
 
@@ -22,34 +23,40 @@ export const ensureDirectory = (targetPath: string): void => {
   fs.mkdirSync(targetPath, { recursive: true });
 };
 
+const SEGMENT_PATTERN = /[\u4e00-\u9fff]+|[a-z0-9]+/g;
+const CHINESE_PATTERN = /[\u4e00-\u9fff]/;
+
+const fallbackChineseTokenize = (text: string): string[] => text.split('').filter(Boolean);
+
+const tokenizeChineseChunk = (text: string): string[] => {
+  try {
+    const preciseTokens = nodejieba.cut(text, true).filter(Boolean);
+    const preciseSet = new Set(preciseTokens);
+    const searchTokens = nodejieba
+      .cutForSearch(text, true)
+      .filter((token) => token.length > 1 && !preciseSet.has(token));
+    return [...preciseTokens, ...searchTokens];
+  } catch {
+    return fallbackChineseTokenize(text);
+  }
+};
+
 export const tokenize = (text: string): string[] => {
   const lowered = text.toLowerCase();
+  // 先将文本转换为小写，再进行分词
+  // 分词规则：中文字符、英文字符、数字字符
+  const segments = lowered.match(SEGMENT_PATTERN) ?? []; 
   const tokens: string[] = [];
-  let current = '';
 
-  for (const char of lowered) {
-    if (/[\u4e00-\u9fff]/.test(char)) {
-      if (current) {
-        tokens.push(current);
-        current = '';
-      }
-      tokens.push(char);
+  for (const segment of segments) {
+    if (CHINESE_PATTERN.test(segment)) {
+      tokens.push(...tokenizeChineseChunk(segment));
       continue;
     }
-    if (/[a-z0-9]/.test(char)) {
-      current += char;
-      continue;
-    }
-    if (current) {
-      tokens.push(current);
-      current = '';
-    }
+    tokens.push(segment);
   }
 
-  if (current) {
-    tokens.push(current);
-  }
-  return tokens;
+  return tokens.filter((token) => token.length > 0);
 };
 
 export const hashTextToVector = (text: string, dim: number): number[] => {
