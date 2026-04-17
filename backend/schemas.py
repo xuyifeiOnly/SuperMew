@@ -149,6 +149,16 @@ class DocumentUploadJobResponse(BaseModel):
     steps: List[UploadStepInfo]
 
 
+class DocumentDeleteStartResponse(BaseModel):
+    job_id: str
+    filename: str
+    message: str
+
+
+class DocumentDeleteJobResponse(DocumentUploadJobResponse):
+    pass
+
+
 class DocumentDeleteResponse(BaseModel):
     filename: str
     chunks_deleted: int

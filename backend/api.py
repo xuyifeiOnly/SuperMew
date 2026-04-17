@@ -20,7 +20,9 @@ from schemas import (
     ChatRequest,
     ChatResponse,
     CurrentUserResponse,
+    DocumentDeleteJobResponse,
     DocumentDeleteResponse,
+    DocumentDeleteStartResponse,
     DocumentInfo,
     DocumentListResponse,
     DocumentUploadJobResponse,
@@ -34,7 +36,7 @@ from schemas import (
     SessionListResponse,
     SessionMessagesResponse,
 )
-from upload_jobs import upload_job_manager
+from upload_jobs import DELETE_STEPS, delete_job_manager, upload_job_manager
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR.parent / "data"
@@ -281,6 +283,38 @@ def _process_upload_job(job_id: str, file_path: str, filename: str) -> None:
         upload_job_manager.fail_job(job_id, failed_step, str(e))
 
 
+def _process_delete_job(job_id: str, filename: str) -> None:
+    """后台执行文档删除，并把每个删除阶段同步给前端行内进度卡片。"""
+    failed_step = "prepare"
+    try:
+        failed_step = "prepare"
+        delete_job_manager.update_step(job_id, "prepare", 20, "running", "正在初始化 Milvus 集合")
+        milvus_manager.init_collection()
+        delete_expr = f'filename == "{filename}"'
+        delete_job_manager.complete_step(job_id, "prepare", "删除任务已创建")
+
+        failed_step = "bm25"
+        delete_job_manager.update_step(job_id, "bm25", 20, "running", "正在同步 BM25 统计")
+        _remove_bm25_stats_for_filename(filename)
+        delete_job_manager.complete_step(job_id, "bm25", "BM25 统计已同步")
+
+        failed_step = "milvus"
+        delete_job_manager.update_step(job_id, "milvus", 30, "running", "正在删除 Milvus 向量数据")
+        result = milvus_manager.delete(delete_expr)
+        deleted_count = result.get("delete_count", 0) if isinstance(result, dict) else 0
+        delete_job_manager.complete_step(job_id, "milvus", f"向量数据已删除：{deleted_count} 条")
+
+        failed_step = "parent_store"
+        delete_job_manager.update_step(job_id, "parent_store", 30, "running", "正在删除 PostgreSQL 父级分块")
+        parent_chunk_store.delete_by_filename(filename)
+        delete_job_manager.complete_step(job_id, "parent_store", "父级分块已删除")
+
+        # 完成摘要会由前端保留 3 秒，再自动从文档列表移除。
+        delete_job_manager.complete_job(job_id, f"已删除 {filename}，向量数据 {deleted_count} 条")
+    except Exception as e:
+        delete_job_manager.fail_job(job_id, failed_step, str(e))
+
+
 @router.get("/documents", response_model=DocumentListResponse)
 async def list_documents(_: User = Depends(require_admin)):
     """获取已上传的文档列表（管理员）"""
@@ -355,6 +389,37 @@ async def list_upload_jobs(_: User = Depends(require_admin)):
     jobs = upload_job_manager.list_jobs()
     jobs.sort(key=lambda item: item.get("created_at", ""), reverse=True)
     return [DocumentUploadJobResponse(**job) for job in jobs]
+
+
+@router.delete("/documents/delete/async/{filename}", response_model=DocumentDeleteStartResponse)
+async def delete_document_async(
+    filename: str,
+    background_tasks: BackgroundTasks,
+    _: User = Depends(require_admin),
+):
+    """轻量版异步删除：立即返回 job_id，实际删除在后台执行。"""
+    job = delete_job_manager.create_job(
+        filename,
+        steps=DELETE_STEPS,
+        current_step="prepare",
+        message="等待删除",
+        completion_step="parent_store",
+    )
+    delete_job_manager.update_step(job["job_id"], "prepare", 1, "running", "删除任务已提交")
+    background_tasks.add_task(_process_delete_job, job["job_id"], filename)
+    return DocumentDeleteStartResponse(
+        job_id=job["job_id"],
+        filename=filename,
+        message=f"正在删除 {filename}",
+    )
+
+
+@router.get("/documents/delete/jobs/{job_id}", response_model=DocumentDeleteJobResponse)
+async def get_delete_job(job_id: str, _: User = Depends(require_admin)):
+    job = delete_job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="删除任务不存在或已过期")
+    return DocumentDeleteJobResponse(**job)
 
 
 @router.post("/documents/upload", response_model=DocumentUploadResponse)

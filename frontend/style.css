@@ -924,6 +924,12 @@ textarea {
     box-shadow: 0 4px 12px rgba(255, 107, 107, 0.3);
 }
 
+.btn-danger:disabled {
+    cursor: not-allowed;
+    opacity: 0.75;
+    transform: none;
+}
+
 .upload-progress {
     padding: 12px;
     background-color: var(--accent-color);
@@ -1068,13 +1074,17 @@ textarea {
 
 .document-item {
     display: flex;
-    align-items: center;
+    align-items: stretch;
     justify-content: space-between;
     padding: 15px;
     background-color: var(--bg-color);
     border-radius: 12px;
     border: 2px solid transparent;
     transition: var(--transition);
+}
+
+.document-item.deleting {
+    border-color: rgba(255, 107, 107, 0.35);
 }
 
 .document-item:hover {
@@ -1087,6 +1097,31 @@ textarea {
     align-items: center;
     gap: 15px;
     flex: 1;
+    min-width: 0;
+}
+
+.document-main {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+}
+
+.document-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+}
+
+.delete-progress {
+    border-left-color: #ff6b6b;
+    background-color: #fff5f5;
+}
+
+.delete-progress .upload-step-fill {
+    background: linear-gradient(90deg, #ff8787, #ffd43b);
 }
 
 .document-icon {
@@ -1116,12 +1151,18 @@ textarea {
     display: flex;
     flex-direction: column;
     gap: 5px;
+    min-width: 0;
 }
 
 .document-name {
     font-weight: 600;
     color: var(--text-color);
     font-size: 1rem;
+    overflow-wrap: anywhere;
+}
+
+.document-row .btn-danger {
+    flex: 0 0 auto;
 }
 
 .document-meta {

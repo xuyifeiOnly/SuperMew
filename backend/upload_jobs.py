@@ -24,6 +24,13 @@ DEFAULT_STEPS = [
     ("vector_store", "向量化入库"),
 ]
 
+DELETE_STEPS = [
+    ("prepare", "准备删除"),
+    ("bm25", "同步 BM25 统计"),
+    ("milvus", "删除向量数据"),
+    ("parent_store", "删除父级分块"),
+]
+
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
@@ -36,15 +43,26 @@ class UploadJobManager:
         self._jobs: dict[str, dict] = {}
         self._lock = Lock()
 
-    def create_job(self, filename: str) -> dict:
+    def create_job(
+        self,
+        filename: str,
+        *,
+        steps: list[tuple[str, str]] | None = None,
+        current_step: str = "upload",
+        message: str = "等待上传",
+        completion_step: str = "vector_store",
+    ) -> dict:
+        steps = steps or DEFAULT_STEPS
         job_id = uuid4().hex
         now = _now_iso()
         job = {
             "job_id": job_id,
             "filename": filename,
             "status": "pending",
-            "current_step": "upload",
-            "message": "等待上传",
+            "current_step": current_step,
+            "message": message,
+            # 完成节点用于区分上传和删除，避免 complete_job 写死最后一步。
+            "completion_step": completion_step,
             "total_chunks": 0,
             "processed_chunks": 0,
             "error": None,
@@ -58,7 +76,7 @@ class UploadJobManager:
                     "status": "pending",
                     "message": "",
                 }
-                for key, label in DEFAULT_STEPS
+                for key, label in steps
             ],
         }
         with self._lock:
@@ -119,7 +137,7 @@ class UploadJobManager:
                     step["percent"] = 100
                     step["status"] = "completed"
             job["status"] = "completed"
-            job["current_step"] = "vector_store"
+            job["current_step"] = job.get("completion_step") or job["current_step"]
             job["message"] = message
             job["error"] = None
             job["updated_at"] = _now_iso()
@@ -154,3 +172,4 @@ class UploadJobManager:
 
 
 upload_job_manager = UploadJobManager()
+delete_job_manager = UploadJobManager()

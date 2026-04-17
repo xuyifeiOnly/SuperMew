@@ -21,6 +21,9 @@ createApp({
             uploadProgressCollapsed: false,
             activeUploadJobId: '',
             uploadPollTimer: null,
+            deleteJobs: {},
+            deletePollTimers: {},
+            deleteRemoveTimers: {},
             token: localStorage.getItem('accessToken') || '',
             currentUser: null,
             authMode: 'login',
@@ -53,6 +56,8 @@ createApp({
     },
     beforeUnmount() {
         this.stopUploadJobPolling();
+        this.stopAllDeleteJobPolling();
+        Object.values(this.deleteRemoveTimers).forEach(timer => clearTimeout(timer));
     },
     methods: {
         configureMarked() {
@@ -406,6 +411,22 @@ createApp({
             this.loadDocuments();
         },
 
+        mergeDocumentsWithActiveDeletes(nextDocuments) {
+            const merged = Array.isArray(nextDocuments) ? [...nextDocuments] : [];
+            Object.keys(this.deleteJobs).forEach(filename => {
+                const job = this.deleteJobs[filename];
+                if (!job || job.status === 'failed') return;
+                const exists = merged.some(doc => doc.filename === filename);
+                if (!exists) {
+                    const currentDoc = this.documents.find(doc => doc.filename === filename);
+                    if (currentDoc) {
+                        merged.push(currentDoc);
+                    }
+                }
+            });
+            return merged;
+        },
+
         async loadDocuments() {
             this.documentsLoading = true;
             try {
@@ -415,7 +436,7 @@ createApp({
                     throw new Error(data.detail || 'Failed to load documents');
                 }
                 const data = await response.json();
-                this.documents = data.documents;
+                this.documents = this.mergeDocumentsWithActiveDeletes(data.documents);
             } catch (error) {
                 alert('加载文档列表失败：' + error.message);
             } finally {
@@ -594,13 +615,163 @@ createApp({
             }
         },
 
+        createDeleteSteps() {
+            return [
+                { key: 'prepare', label: '准备删除', percent: 0, status: 'pending', message: '' },
+                { key: 'bm25', label: '同步 BM25 统计', percent: 0, status: 'pending', message: '' },
+                { key: 'milvus', label: '删除向量数据', percent: 0, status: 'pending', message: '' },
+                { key: 'parent_store', label: '删除父级分块', percent: 0, status: 'pending', message: '' },
+            ];
+        },
+
+        isDeletingDocument(filename) {
+            const job = this.deleteJobs[filename];
+            return job && job.status === 'running';
+        },
+
+        isDeleteActionLocked(filename) {
+            const job = this.deleteJobs[filename];
+            return job && (job.status === 'running' || job.status === 'completed');
+        },
+
+        getDeleteButtonIcon(filename) {
+            const job = this.deleteJobs[filename];
+            if (job?.status === 'running') return 'fas fa-spinner fa-spin';
+            if (job?.status === 'completed') return 'fas fa-check';
+            return 'fas fa-trash';
+        },
+
+        setDeleteJob(filename, nextJob) {
+            this.deleteJobs = {
+                ...this.deleteJobs,
+                [filename]: {
+                    ...(this.deleteJobs[filename] || {}),
+                    ...nextJob
+                }
+            };
+        },
+
+        syncDeleteJob(filename, job) {
+            const current = this.deleteJobs[filename] || {};
+            // 后端返回统一的步骤结构，前端只负责同步到当前文档行内卡片。
+            this.setDeleteJob(filename, {
+                jobId: job.job_id,
+                status: job.status,
+                message: job.message || '',
+                collapsed: job.status === 'completed' ? true : Boolean(current.collapsed),
+                steps: Array.isArray(job.steps) ? job.steps.map(step => ({
+                    key: step.key,
+                    label: step.label,
+                    percent: step.percent,
+                    status: step.status,
+                    message: step.message || ''
+                })) : this.createDeleteSteps()
+            });
+        },
+
+        toggleDeleteJobCollapsed(filename) {
+            const job = this.deleteJobs[filename];
+            if (!job) return;
+            this.setDeleteJob(filename, { collapsed: !job.collapsed });
+        },
+
+        stopDeleteJobPolling(filename) {
+            const timer = this.deletePollTimers[filename];
+            if (!timer) return;
+            clearInterval(timer);
+            const { [filename]: _removed, ...rest } = this.deletePollTimers;
+            this.deletePollTimers = rest;
+        },
+
+        stopAllDeleteJobPolling() {
+            Object.keys(this.deletePollTimers).forEach(filename => this.stopDeleteJobPolling(filename));
+        },
+
+        clearDeleteRemovalTimer(filename) {
+            const timer = this.deleteRemoveTimers[filename];
+            if (!timer) return;
+            clearTimeout(timer);
+            const { [filename]: _removed, ...rest } = this.deleteRemoveTimers;
+            this.deleteRemoveTimers = rest;
+        },
+
+        scheduleDeletedDocumentRemoval(filename) {
+            this.clearDeleteRemovalTimer(filename);
+            // 删除完成后先保留 3 秒摘要，再从当前列表移除并刷新后端状态。
+            const timer = setTimeout(async () => {
+                this.documents = this.documents.filter(doc => doc.filename !== filename);
+                const { [filename]: _job, ...jobs } = this.deleteJobs;
+                const { [filename]: _timer, ...timers } = this.deleteRemoveTimers;
+                this.deleteJobs = jobs;
+                this.deleteRemoveTimers = timers;
+                await this.loadDocuments();
+            }, 3000);
+            this.deleteRemoveTimers = {
+                ...this.deleteRemoveTimers,
+                [filename]: timer
+            };
+        },
+
+        startDeleteJobPolling(filename, jobId) {
+            this.stopDeleteJobPolling(filename);
+
+            const poll = async () => {
+                try {
+                    const response = await this.authFetch(`/documents/delete/jobs/${encodeURIComponent(jobId)}`);
+                    if (!response.ok) {
+                        const error = await response.json().catch(() => ({}));
+                        throw new Error(error.detail || 'Failed to load delete job');
+                    }
+
+                    const job = await response.json();
+                    this.syncDeleteJob(filename, job);
+
+                    if (job.status === 'completed') {
+                        this.stopDeleteJobPolling(filename);
+                        this.scheduleDeletedDocumentRemoval(filename);
+                    } else if (job.status === 'failed') {
+                        this.stopDeleteJobPolling(filename);
+                    }
+                } catch (error) {
+                    this.setDeleteJob(filename, {
+                        status: 'failed',
+                        message: '删除进度查询失败：' + error.message,
+                        collapsed: false,
+                        steps: this.deleteJobs[filename]?.steps || this.createDeleteSteps()
+                    });
+                    this.stopDeleteJobPolling(filename);
+                }
+            };
+
+            poll();
+            this.deletePollTimers = {
+                ...this.deletePollTimers,
+                [filename]: setInterval(poll, 1000)
+            };
+        },
+
         async deleteDocument(filename) {
+            if (this.isDeletingDocument(filename)) {
+                return;
+            }
             if (!confirm(`确定要删除文档 "${filename}" 吗？这将同时删除 Milvus 中的所有相关向量。`)) {
                 return;
             }
 
+            this.clearDeleteRemovalTimer(filename);
+            this.setDeleteJob(filename, {
+                status: 'running',
+                message: '正在提交删除任务...',
+                collapsed: false,
+                steps: this.createDeleteSteps().map(step => (
+                    step.key === 'prepare'
+                        ? { ...step, percent: 1, status: 'running', message: '正在提交删除任务' }
+                        : step
+                ))
+            });
+
             try {
-                const response = await this.authFetch(`/documents/${encodeURIComponent(filename)}`, {
+                const response = await this.authFetch(`/documents/delete/async/${encodeURIComponent(filename)}`, {
                     method: 'DELETE'
                 });
 
@@ -610,11 +781,21 @@ createApp({
                 }
 
                 const data = await response.json();
-                alert(data.message);
-                await this.loadDocuments();
+                this.setDeleteJob(filename, {
+                    jobId: data.job_id,
+                    status: 'running',
+                    message: data.message || `正在删除 ${filename}`,
+                    collapsed: false
+                });
+                this.startDeleteJobPolling(filename, data.job_id);
 
             } catch (error) {
-                alert('删除文档失败：' + error.message);
+                this.setDeleteJob(filename, {
+                    status: 'failed',
+                    message: '删除文档失败：' + error.message,
+                    collapsed: false,
+                    steps: this.deleteJobs[filename]?.steps || this.createDeleteSteps()
+                });
             }
         },
 
