@@ -121,6 +121,34 @@ class DocumentUploadResponse(BaseModel):
     message: str
 
 
+class DocumentUploadStartResponse(BaseModel):
+    job_id: str
+    filename: str
+    message: str
+
+
+class UploadStepInfo(BaseModel):
+    key: str
+    label: str
+    percent: int
+    status: str
+    message: str = ""
+
+
+class DocumentUploadJobResponse(BaseModel):
+    job_id: str
+    filename: str
+    status: str
+    current_step: str
+    message: str
+    total_chunks: int = 0
+    processed_chunks: int = 0
+    error: Optional[str] = None
+    created_at: str
+    updated_at: str
+    steps: List[UploadStepInfo]
+
+
 class DocumentDeleteResponse(BaseModel):
     filename: str
     chunks_deleted: int

@@ -17,6 +17,9 @@ createApp({
             selectedFile: null,
             isUploading: false,
             uploadProgress: '',
+            uploadSteps: [],
+            activeUploadJobId: '',
+            uploadPollTimer: null,
             token: localStorage.getItem('accessToken') || '',
             currentUser: null,
             authMode: 'login',
@@ -46,6 +49,9 @@ createApp({
                 this.handleLogout();
             }
         }
+    },
+    beforeUnmount() {
+        this.stopUploadJobPolling();
     },
     methods: {
         configureMarked() {
@@ -421,7 +427,137 @@ createApp({
             if (files && files.length > 0) {
                 this.selectedFile = files[0];
                 this.uploadProgress = '';
+                this.uploadSteps = this.createUploadSteps();
+                this.activeUploadJobId = '';
             }
+        },
+
+        createUploadSteps() {
+            return [
+                { key: 'upload', label: '文档上传', percent: 0, status: 'pending', message: '' },
+                { key: 'cleanup', label: '清理旧版本', percent: 0, status: 'pending', message: '' },
+                { key: 'parse', label: '解析与分块', percent: 0, status: 'pending', message: '' },
+                { key: 'parent_store', label: '父级分块入库', percent: 0, status: 'pending', message: '' },
+                { key: 'vector_store', label: '向量化入库', percent: 0, status: 'pending', message: '' },
+            ];
+        },
+
+        updateUploadStep(key, percent, status = 'running', message = '') {
+            if (!this.uploadSteps.length) {
+                this.uploadSteps = this.createUploadSteps();
+            }
+            const idx = this.uploadSteps.findIndex(step => step.key === key);
+            if (idx === -1) return;
+            this.uploadSteps[idx] = {
+                ...this.uploadSteps[idx],
+                percent: Math.max(0, Math.min(100, Math.round(percent || 0))),
+                status,
+                message
+            };
+        },
+
+        uploadFileWithProgress(file) {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                const formData = new FormData();
+                formData.append('file', file);
+
+                xhr.open('POST', '/documents/upload/async');
+                const headers = this.authHeaders();
+                Object.entries(headers).forEach(([key, value]) => xhr.setRequestHeader(key, value));
+
+                xhr.upload.onprogress = (event) => {
+                    if (!event.lengthComputable) return;
+                    const percent = Math.round((event.loaded / event.total) * 100);
+                    this.updateUploadStep('upload', percent, 'running', `已上传 ${percent}%`);
+                };
+
+                xhr.onload = () => {
+                    if (xhr.status === 401) {
+                        this.handleLogout();
+                        reject(new Error('登录已过期，请重新登录'));
+                        return;
+                    }
+
+                    let data = {};
+                    try {
+                        data = JSON.parse(xhr.responseText || '{}');
+                    } catch (e) {
+                        reject(new Error('上传响应解析失败'));
+                        return;
+                    }
+
+                    if (xhr.status < 200 || xhr.status >= 300) {
+                        reject(new Error(data.detail || `HTTP ${xhr.status}`));
+                        return;
+                    }
+
+                    this.updateUploadStep('upload', 100, 'completed', '文档上传完成');
+                    resolve(data);
+                };
+
+                xhr.onerror = () => reject(new Error('上传请求失败'));
+                xhr.onabort = () => reject(new Error('上传已取消'));
+                xhr.send(formData);
+            });
+        },
+
+        syncUploadJob(job) {
+            this.activeUploadJobId = job.job_id;
+            this.uploadProgress = job.message || '';
+            if (Array.isArray(job.steps)) {
+                this.uploadSteps = job.steps.map(step => ({
+                    key: step.key,
+                    label: step.label,
+                    percent: step.percent,
+                    status: step.status,
+                    message: step.message || ''
+                }));
+            }
+        },
+
+        stopUploadJobPolling() {
+            if (this.uploadPollTimer) {
+                clearInterval(this.uploadPollTimer);
+                this.uploadPollTimer = null;
+            }
+        },
+
+        startUploadJobPolling(jobId) {
+            this.stopUploadJobPolling();
+
+            const poll = async () => {
+                try {
+                    const response = await this.authFetch(`/documents/upload/jobs/${encodeURIComponent(jobId)}`);
+                    if (!response.ok) {
+                        const error = await response.json().catch(() => ({}));
+                        throw new Error(error.detail || 'Failed to load upload job');
+                    }
+
+                    const job = await response.json();
+                    this.syncUploadJob(job);
+
+                    if (job.status === 'completed') {
+                        this.stopUploadJobPolling();
+                        this.isUploading = false;
+                        this.selectedFile = null;
+                        if (this.$refs.fileInput) {
+                            this.$refs.fileInput.value = '';
+                        }
+                        await this.loadDocuments();
+                    } else if (job.status === 'failed') {
+                        this.stopUploadJobPolling();
+                        this.isUploading = false;
+                    }
+                } catch (error) {
+                    this.uploadProgress = '进度查询失败：' + error.message;
+                    this.stopUploadJobPolling();
+                    this.isUploading = false;
+                }
+            };
+
+            poll();
+            this.uploadPollTimer = setInterval(poll, 1000);
         },
 
         async uploadDocument() {
@@ -432,38 +568,17 @@ createApp({
 
             this.isUploading = true;
             this.uploadProgress = '正在上传...';
+            this.uploadSteps = this.createUploadSteps();
+            this.updateUploadStep('upload', 0, 'running', '准备上传');
 
             try {
-                const formData = new FormData();
-                formData.append('file', this.selectedFile);
-
-                const response = await this.authFetch('/documents/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (!response.ok) {
-                    const error = await response.json().catch(() => ({}));
-                    throw new Error(error.detail || 'Upload failed');
-                }
-
-                const data = await response.json();
+                const data = await this.uploadFileWithProgress(this.selectedFile);
                 this.uploadProgress = data.message;
-
-                this.selectedFile = null;
-                if (this.$refs.fileInput) {
-                    this.$refs.fileInput.value = '';
-                }
-
-                await this.loadDocuments();
-
-                setTimeout(() => {
-                    this.uploadProgress = '';
-                }, 3000);
-
+                this.activeUploadJobId = data.job_id;
+                this.startUploadJobPolling(data.job_id);
             } catch (error) {
+                this.updateUploadStep('upload', 100, 'failed', error.message);
                 this.uploadProgress = '上传失败：' + error.message;
-            } finally {
                 this.isUploading = false;
             }
         },

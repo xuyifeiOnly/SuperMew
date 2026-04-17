@@ -99,8 +99,25 @@
                                 <i class="fas fa-upload"></i> {{ isUploading ? '上传中...' : '开始上传' }}
                             </button>
                         </div>
-                        <div v-if="uploadProgress" class="upload-progress">
-                            {{ uploadProgress }}
+                        <div v-if="uploadSteps.length" class="upload-progress">
+                            <div v-if="uploadProgress" class="upload-message">{{ uploadProgress }}</div>
+                            <div class="upload-step-list">
+                                <div
+                                    v-for="step in uploadSteps"
+                                    :key="step.key"
+                                    class="upload-step"
+                                    :class="`upload-step-${step.status}`"
+                                >
+                                    <div class="upload-step-header">
+                                        <span class="upload-step-label">{{ step.label }}</span>
+                                        <span class="upload-step-percent">{{ step.percent }}%</span>
+                                    </div>
+                                    <div class="upload-step-bar">
+                                        <div class="upload-step-fill" :style="{ width: step.percent + '%' }"></div>
+                                    </div>
+                                    <div v-if="step.message" class="upload-step-message">{{ step.message }}</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
