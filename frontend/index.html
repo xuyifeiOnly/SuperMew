@@ -99,8 +99,29 @@
                                 <i class="fas fa-upload"></i> {{ isUploading ? '上传中...' : '开始上传' }}
                             </button>
                         </div>
-                        <div v-if="uploadProgress" class="upload-progress">
-                            {{ uploadProgress }}
+                        <div v-if="uploadSteps.length" class="upload-progress" :class="{ collapsed: uploadProgressCollapsed }">
+                            <button type="button" class="upload-progress-header" @click="toggleUploadProgressCollapsed">
+                                <span v-if="uploadProgress" class="upload-message">{{ uploadProgress }}</span>
+                                <span v-else class="upload-message">上传进度</span>
+                                <span class="upload-toggle">{{ uploadProgressCollapsed ? '展开' : '收起' }}</span>
+                            </button>
+                            <div v-show="!uploadProgressCollapsed" class="upload-step-list">
+                                <div
+                                    v-for="step in uploadSteps"
+                                    :key="step.key"
+                                    class="upload-step"
+                                    :class="`upload-step-${step.status}`"
+                                >
+                                    <div class="upload-step-header">
+                                        <span class="upload-step-label">{{ step.label }}</span>
+                                        <span class="upload-step-percent">{{ step.percent }}%</span>
+                                    </div>
+                                    <div class="upload-step-bar">
+                                        <div class="upload-step-fill" :style="{ width: step.percent + '%' }"></div>
+                                    </div>
+                                    <div v-if="step.message" class="upload-step-message">{{ step.message }}</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -125,26 +146,60 @@
                             v-for="doc in documents" 
                             :key="doc.filename"
                             class="document-item"
+                            :class="{ deleting: deleteJobs[doc.filename]?.status === 'running' }"
                         >
-                            <div class="document-info">
-                                <div class="document-icon">
-                                    <i :class="getFileIcon(doc.file_type)"></i>
+                            <div class="document-main">
+                                <div class="document-row">
+                                    <div class="document-info">
+                                        <div class="document-icon">
+                                            <i :class="getFileIcon(doc.file_type)"></i>
+                                        </div>
+                                        <div class="document-details">
+                                            <div class="document-name">{{ doc.filename }}</div>
+                                            <div class="document-meta">
+                                                <span>{{ doc.file_type }}</span>
+                                                <span>{{ doc.chunk_count }} 个文本片段</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <button 
+                                        @click="deleteDocument(doc.filename)" 
+                                        class="btn-danger"
+                                        title="删除文档"
+                                        :disabled="isDeleteActionLocked(doc.filename)"
+                                    >
+                                        <i :class="getDeleteButtonIcon(doc.filename)"></i>
+                                    </button>
                                 </div>
-                                <div class="document-details">
-                                    <div class="document-name">{{ doc.filename }}</div>
-                                    <div class="document-meta">
-                                        <span>{{ doc.file_type }}</span>
-                                        <span>{{ doc.chunk_count }} 个文本片段</span>
+
+                                <div
+                                    v-if="deleteJobs[doc.filename]"
+                                    class="upload-progress delete-progress"
+                                    :class="{ collapsed: deleteJobs[doc.filename].collapsed }"
+                                >
+                                    <button type="button" class="upload-progress-header" @click="toggleDeleteJobCollapsed(doc.filename)">
+                                        <span class="upload-message">{{ deleteJobs[doc.filename].message || '删除进度' }}</span>
+                                        <span class="upload-toggle">{{ deleteJobs[doc.filename].collapsed ? '展开' : '收起' }}</span>
+                                    </button>
+                                    <div v-show="!deleteJobs[doc.filename].collapsed" class="upload-step-list">
+                                        <div
+                                            v-for="step in deleteJobs[doc.filename].steps"
+                                            :key="step.key"
+                                            class="upload-step"
+                                            :class="`upload-step-${step.status}`"
+                                        >
+                                            <div class="upload-step-header">
+                                                <span class="upload-step-label">{{ step.label }}</span>
+                                                <span class="upload-step-percent">{{ step.percent }}%</span>
+                                            </div>
+                                            <div class="upload-step-bar">
+                                                <div class="upload-step-fill" :style="{ width: step.percent + '%' }"></div>
+                                            </div>
+                                            <div v-if="step.message" class="upload-step-message">{{ step.message }}</div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
-                            <button 
-                                @click="deleteDocument(doc.filename)" 
-                                class="btn-danger"
-                                title="删除文档"
-                            >
-                                <i class="fas fa-trash"></i>
-                            </button>
                         </div>
                     </div>
                 </div>
