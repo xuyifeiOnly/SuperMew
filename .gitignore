@@ -17,3 +17,6 @@ volumes/
 .DS_Store
 node_modules/
 data/
+
+# test
+tests/

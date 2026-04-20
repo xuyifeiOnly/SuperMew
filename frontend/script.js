@@ -17,6 +17,13 @@ createApp({
             selectedFile: null,
             isUploading: false,
             uploadProgress: '',
+            uploadSteps: [],
+            uploadProgressCollapsed: false,
+            activeUploadJobId: '',
+            uploadPollTimer: null,
+            deleteJobs: {},
+            deletePollTimers: {},
+            deleteRemoveTimers: {},
             token: localStorage.getItem('accessToken') || '',
             currentUser: null,
             authMode: 'login',
@@ -46,6 +53,11 @@ createApp({
                 this.handleLogout();
             }
         }
+    },
+    beforeUnmount() {
+        this.stopUploadJobPolling();
+        this.stopAllDeleteJobPolling();
+        Object.values(this.deleteRemoveTimers).forEach(timer => clearTimeout(timer));
     },
     methods: {
         configureMarked() {
@@ -414,6 +426,22 @@ createApp({
             this.loadDocuments();
         },
 
+        mergeDocumentsWithActiveDeletes(nextDocuments) {
+            const merged = Array.isArray(nextDocuments) ? [...nextDocuments] : [];
+            Object.keys(this.deleteJobs).forEach(filename => {
+                const job = this.deleteJobs[filename];
+                if (!job || job.status === 'failed') return;
+                const exists = merged.some(doc => doc.filename === filename);
+                if (!exists) {
+                    const currentDoc = this.documents.find(doc => doc.filename === filename);
+                    if (currentDoc) {
+                        merged.push(currentDoc);
+                    }
+                }
+            });
+            return merged;
+        },
+
         async loadDocuments() {
             this.documentsLoading = true;
             try {
@@ -423,7 +451,7 @@ createApp({
                     throw new Error(data.detail || 'Failed to load documents');
                 }
                 const data = await response.json();
-                this.documents = data.documents;
+                this.documents = this.mergeDocumentsWithActiveDeletes(data.documents);
             } catch (error) {
                 alert('加载文档列表失败：' + error.message);
             } finally {
@@ -436,7 +464,146 @@ createApp({
             if (files && files.length > 0) {
                 this.selectedFile = files[0];
                 this.uploadProgress = '';
+                this.uploadSteps = this.createUploadSteps();
+                this.uploadProgressCollapsed = false;
+                this.activeUploadJobId = '';
             }
+        },
+
+        createUploadSteps() {
+            return [
+                { key: 'upload', label: '文档上传', percent: 0, status: 'pending', message: '' },
+                { key: 'cleanup', label: '清理旧版本', percent: 0, status: 'pending', message: '' },
+                { key: 'parse', label: '解析与分块', percent: 0, status: 'pending', message: '' },
+                { key: 'parent_store', label: '父级分块入库', percent: 0, status: 'pending', message: '' },
+                { key: 'vector_store', label: '向量化入库', percent: 0, status: 'pending', message: '' },
+            ];
+        },
+
+        updateUploadStep(key, percent, status = 'running', message = '') {
+            if (!this.uploadSteps.length) {
+                this.uploadSteps = this.createUploadSteps();
+            }
+            const idx = this.uploadSteps.findIndex(step => step.key === key);
+            if (idx === -1) return;
+            this.uploadSteps[idx] = {
+                ...this.uploadSteps[idx],
+                percent: Math.max(0, Math.min(100, Math.round(percent || 0))),
+                status,
+                message
+            };
+        },
+
+        uploadFileWithProgress(file) {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                const formData = new FormData();
+                formData.append('file', file);
+
+                xhr.open('POST', '/documents/upload/async');
+                const headers = this.authHeaders();
+                Object.entries(headers).forEach(([key, value]) => xhr.setRequestHeader(key, value));
+
+                xhr.upload.onprogress = (event) => {
+                    if (!event.lengthComputable) return;
+                    const percent = Math.round((event.loaded / event.total) * 100);
+                    this.updateUploadStep('upload', percent, 'running', `已上传 ${percent}%`);
+                };
+
+                xhr.onload = () => {
+                    if (xhr.status === 401) {
+                        this.handleLogout();
+                        reject(new Error('登录已过期，请重新登录'));
+                        return;
+                    }
+
+                    let data = {};
+                    try {
+                        data = JSON.parse(xhr.responseText || '{}');
+                    } catch (e) {
+                        reject(new Error('上传响应解析失败'));
+                        return;
+                    }
+
+                    if (xhr.status < 200 || xhr.status >= 300) {
+                        reject(new Error(data.detail || `HTTP ${xhr.status}`));
+                        return;
+                    }
+
+                    this.updateUploadStep('upload', 100, 'completed', '文档上传完成');
+                    resolve(data);
+                };
+
+                xhr.onerror = () => reject(new Error('上传请求失败'));
+                xhr.onabort = () => reject(new Error('上传已取消'));
+                xhr.send(formData);
+            });
+        },
+
+        syncUploadJob(job) {
+            this.activeUploadJobId = job.job_id;
+            this.uploadProgress = job.message || '';
+            if (Array.isArray(job.steps)) {
+                this.uploadSteps = job.steps.map(step => ({
+                    key: step.key,
+                    label: step.label,
+                    percent: step.percent,
+                    status: step.status,
+                    message: step.message || ''
+                }));
+            }
+            // 入库成功后自动收起步骤明细，保留摘要供用户再次展开查看。
+            if (job.status === 'completed') {
+                this.uploadProgressCollapsed = true;
+            }
+        },
+
+        toggleUploadProgressCollapsed() {
+            this.uploadProgressCollapsed = !this.uploadProgressCollapsed;
+        },
+
+        stopUploadJobPolling() {
+            if (this.uploadPollTimer) {
+                clearInterval(this.uploadPollTimer);
+                this.uploadPollTimer = null;
+            }
+        },
+
+        startUploadJobPolling(jobId) {
+            this.stopUploadJobPolling();
+
+            const poll = async () => {
+                try {
+                    const response = await this.authFetch(`/documents/upload/jobs/${encodeURIComponent(jobId)}`);
+                    if (!response.ok) {
+                        const error = await response.json().catch(() => ({}));
+                        throw new Error(error.detail || 'Failed to load upload job');
+                    }
+
+                    const job = await response.json();
+                    this.syncUploadJob(job);
+
+                    if (job.status === 'completed') {
+                        this.stopUploadJobPolling();
+                        this.isUploading = false;
+                        this.selectedFile = null;
+                        if (this.$refs.fileInput) {
+                            this.$refs.fileInput.value = '';
+                        }
+                        await this.loadDocuments();
+                    } else if (job.status === 'failed') {
+                        this.stopUploadJobPolling();
+                        this.isUploading = false;
+                    }
+                } catch (error) {
+                    this.uploadProgress = '进度查询失败：' + error.message;
+                    this.stopUploadJobPolling();
+                    this.isUploading = false;
+                }
+            };
+
+            poll();
+            this.uploadPollTimer = setInterval(poll, 1000);
         },
 
         async uploadDocument() {
@@ -447,49 +614,179 @@ createApp({
 
             this.isUploading = true;
             this.uploadProgress = '正在上传...';
+            this.uploadSteps = this.createUploadSteps();
+            this.uploadProgressCollapsed = false;
+            this.updateUploadStep('upload', 0, 'running', '准备上传');
 
             try {
-                const formData = new FormData();
-                formData.append('file', this.selectedFile);
-
-                const response = await this.authFetch('/documents/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (!response.ok) {
-                    const error = await response.json().catch(() => ({}));
-                    throw new Error(error.detail || 'Upload failed');
-                }
-
-                const data = await response.json();
+                const data = await this.uploadFileWithProgress(this.selectedFile);
                 this.uploadProgress = data.message;
-
-                this.selectedFile = null;
-                if (this.$refs.fileInput) {
-                    this.$refs.fileInput.value = '';
-                }
-
-                await this.loadDocuments();
-
-                setTimeout(() => {
-                    this.uploadProgress = '';
-                }, 3000);
-
+                this.activeUploadJobId = data.job_id;
+                this.startUploadJobPolling(data.job_id);
             } catch (error) {
+                this.updateUploadStep('upload', 100, 'failed', error.message);
                 this.uploadProgress = '上传失败：' + error.message;
-            } finally {
                 this.isUploading = false;
             }
         },
 
+        createDeleteSteps() {
+            return [
+                { key: 'prepare', label: '准备删除', percent: 0, status: 'pending', message: '' },
+                { key: 'bm25', label: '同步 BM25 统计', percent: 0, status: 'pending', message: '' },
+                { key: 'milvus', label: '删除向量数据', percent: 0, status: 'pending', message: '' },
+                { key: 'parent_store', label: '删除父级分块', percent: 0, status: 'pending', message: '' },
+            ];
+        },
+
+        isDeletingDocument(filename) {
+            const job = this.deleteJobs[filename];
+            return job && job.status === 'running';
+        },
+
+        isDeleteActionLocked(filename) {
+            const job = this.deleteJobs[filename];
+            return job && (job.status === 'running' || job.status === 'completed');
+        },
+
+        getDeleteButtonIcon(filename) {
+            const job = this.deleteJobs[filename];
+            if (job?.status === 'running') return 'fas fa-spinner fa-spin';
+            if (job?.status === 'completed') return 'fas fa-check';
+            return 'fas fa-trash';
+        },
+
+        setDeleteJob(filename, nextJob) {
+            this.deleteJobs = {
+                ...this.deleteJobs,
+                [filename]: {
+                    ...(this.deleteJobs[filename] || {}),
+                    ...nextJob
+                }
+            };
+        },
+
+        syncDeleteJob(filename, job) {
+            const current = this.deleteJobs[filename] || {};
+            // 后端返回统一的步骤结构，前端只负责同步到当前文档行内卡片。
+            this.setDeleteJob(filename, {
+                jobId: job.job_id,
+                status: job.status,
+                message: job.message || '',
+                collapsed: job.status === 'completed' ? true : Boolean(current.collapsed),
+                steps: Array.isArray(job.steps) ? job.steps.map(step => ({
+                    key: step.key,
+                    label: step.label,
+                    percent: step.percent,
+                    status: step.status,
+                    message: step.message || ''
+                })) : this.createDeleteSteps()
+            });
+        },
+
+        toggleDeleteJobCollapsed(filename) {
+            const job = this.deleteJobs[filename];
+            if (!job) return;
+            this.setDeleteJob(filename, { collapsed: !job.collapsed });
+        },
+
+        stopDeleteJobPolling(filename) {
+            const timer = this.deletePollTimers[filename];
+            if (!timer) return;
+            clearInterval(timer);
+            const { [filename]: _removed, ...rest } = this.deletePollTimers;
+            this.deletePollTimers = rest;
+        },
+
+        stopAllDeleteJobPolling() {
+            Object.keys(this.deletePollTimers).forEach(filename => this.stopDeleteJobPolling(filename));
+        },
+
+        clearDeleteRemovalTimer(filename) {
+            const timer = this.deleteRemoveTimers[filename];
+            if (!timer) return;
+            clearTimeout(timer);
+            const { [filename]: _removed, ...rest } = this.deleteRemoveTimers;
+            this.deleteRemoveTimers = rest;
+        },
+
+        scheduleDeletedDocumentRemoval(filename) {
+            this.clearDeleteRemovalTimer(filename);
+            // 删除完成后先保留 3 秒摘要，再从当前列表移除并刷新后端状态。
+            const timer = setTimeout(async () => {
+                this.documents = this.documents.filter(doc => doc.filename !== filename);
+                const { [filename]: _job, ...jobs } = this.deleteJobs;
+                const { [filename]: _timer, ...timers } = this.deleteRemoveTimers;
+                this.deleteJobs = jobs;
+                this.deleteRemoveTimers = timers;
+                await this.loadDocuments();
+            }, 3000);
+            this.deleteRemoveTimers = {
+                ...this.deleteRemoveTimers,
+                [filename]: timer
+            };
+        },
+
+        startDeleteJobPolling(filename, jobId) {
+            this.stopDeleteJobPolling(filename);
+
+            const poll = async () => {
+                try {
+                    const response = await this.authFetch(`/documents/delete/jobs/${encodeURIComponent(jobId)}`);
+                    if (!response.ok) {
+                        const error = await response.json().catch(() => ({}));
+                        throw new Error(error.detail || 'Failed to load delete job');
+                    }
+
+                    const job = await response.json();
+                    this.syncDeleteJob(filename, job);
+
+                    if (job.status === 'completed') {
+                        this.stopDeleteJobPolling(filename);
+                        this.scheduleDeletedDocumentRemoval(filename);
+                    } else if (job.status === 'failed') {
+                        this.stopDeleteJobPolling(filename);
+                    }
+                } catch (error) {
+                    this.setDeleteJob(filename, {
+                        status: 'failed',
+                        message: '删除进度查询失败：' + error.message,
+                        collapsed: false,
+                        steps: this.deleteJobs[filename]?.steps || this.createDeleteSteps()
+                    });
+                    this.stopDeleteJobPolling(filename);
+                }
+            };
+
+            poll();
+            this.deletePollTimers = {
+                ...this.deletePollTimers,
+                [filename]: setInterval(poll, 1000)
+            };
+        },
+
         async deleteDocument(filename) {
+            if (this.isDeletingDocument(filename)) {
+                return;
+            }
             if (!confirm(`确定要删除文档 "${filename}" 吗？这将同时删除 Milvus 中的所有相关向量。`)) {
                 return;
             }
 
+            this.clearDeleteRemovalTimer(filename);
+            this.setDeleteJob(filename, {
+                status: 'running',
+                message: '正在提交删除任务...',
+                collapsed: false,
+                steps: this.createDeleteSteps().map(step => (
+                    step.key === 'prepare'
+                        ? { ...step, percent: 1, status: 'running', message: '正在提交删除任务' }
+                        : step
+                ))
+            });
+
             try {
-                const response = await this.authFetch(`/documents/${encodeURIComponent(filename)}`, {
+                const response = await this.authFetch(`/documents/delete/async/${encodeURIComponent(filename)}`, {
                     method: 'DELETE'
                 });
 
@@ -499,11 +796,21 @@ createApp({
                 }
 
                 const data = await response.json();
-                alert(data.message);
-                await this.loadDocuments();
+                this.setDeleteJob(filename, {
+                    jobId: data.job_id,
+                    status: 'running',
+                    message: data.message || `正在删除 ${filename}`,
+                    collapsed: false
+                });
+                this.startDeleteJobPolling(filename, data.job_id);
 
             } catch (error) {
-                alert('删除文档失败：' + error.message);
+                this.setDeleteJob(filename, {
+                    status: 'failed',
+                    message: '删除文档失败：' + error.message,
+                    collapsed: false,
+                    steps: this.deleteJobs[filename]?.steps || this.createDeleteSteps()
+                });
             }
         },
 

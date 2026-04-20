@@ -10,7 +10,7 @@ class MilvusWriter:
         self.embedding_service = embedding_service or _default_embedding_service
         self.milvus_manager = milvus_manager or MilvusManager()
 
-    def write_documents(self, documents: list[dict], batch_size: int = 50):
+    def write_documents(self, documents: list[dict], batch_size: int = 50, progress_callback=None):
         """
         批量写入文档到 Milvus（同时生成密集和稀疏向量）
         :param documents: 文档列表
@@ -51,3 +51,8 @@ class MilvusWriter:
             ]
 
             self.milvus_manager.insert(insert_data)
+
+            # 每个批次写入后更新进度，前端据此展示“向量化入库 xx%”。
+            if progress_callback:
+                processed = min(i + batch_size, total)
+                progress_callback(processed, total)
