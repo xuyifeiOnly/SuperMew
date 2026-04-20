@@ -30,10 +30,10 @@ const fallbackChineseTokenize = (text: string): string[] => text.split('').filte
 
 const tokenizeChineseChunk = (text: string): string[] => {
   try {
-    const preciseTokens = nodejieba.cut(text, true).filter(Boolean);
+    const preciseTokens = nodejieba.cut(text, true).filter(Boolean); // 默认分词
     const preciseSet = new Set(preciseTokens);
-    const searchTokens = nodejieba
-      .cutForSearch(text, true)
+    const searchTokens = nodejieba 
+      .cutForSearch(text, true)// 搜索引擎模式分词
       .filter((token) => token.length > 1 && !preciseSet.has(token));
     return [...preciseTokens, ...searchTokens];
   } catch {
