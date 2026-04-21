@@ -728,6 +728,15 @@ createApp({
         },
 
         startDeleteJobPolling(filename, jobId) {
+            if (!jobId) {
+                this.setDeleteJob(filename, {
+                    status: 'failed',
+                    message: '删除任务 ID 缺失，无法查询进度',
+                    collapsed: false,
+                    steps: this.deleteJobs[filename]?.steps || this.createDeleteSteps()
+                });
+                return;
+            }
             this.stopDeleteJobPolling(filename);
 
             const poll = async () => {
@@ -796,6 +805,22 @@ createApp({
                 }
 
                 const data = await response.json();
+                if (!data.job_id) {
+                    const doneSteps = this.createDeleteSteps().map(step => ({
+                        ...step,
+                        percent: 100,
+                        status: 'completed',
+                        message: '已完成'
+                    }));
+                    this.setDeleteJob(filename, {
+                        status: 'completed',
+                        message: data.message || `成功删除 ${filename}`,
+                        collapsed: true,
+                        steps: doneSteps
+                    });
+                    this.scheduleDeletedDocumentRemoval(filename);
+                    return;
+                }
                 this.setDeleteJob(filename, {
                     jobId: data.job_id,
                     status: 'running',

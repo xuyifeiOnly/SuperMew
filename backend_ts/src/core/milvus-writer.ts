@@ -8,12 +8,19 @@ export class MilvusWriter {
     private readonly milvusManager: MilvusManager,
   ) {}
 
-  async writeDocuments(documents: LoadedDocumentChunk[], batchSize = 50): Promise<void> {
+  async writeDocuments(
+    documents: LoadedDocumentChunk[],
+    batchSize = 50,
+    progressCallback?: (processed: number, total: number) => void,
+  ): Promise<void> {
     if (!documents.length) {
       return;
     }
     await this.milvusManager.ensureCollection();
     this.embeddingService.incrementAddDocuments(documents.map((item) => item.text));
+    const total = documents.length;
+    let processed = 0;
+    progressCallback?.(processed, total);
 
     for (let index = 0; index < documents.length; index += batchSize) {
       const batch = documents.slice(index, index + batchSize);
@@ -34,6 +41,8 @@ export class MilvusWriter {
         chunk_level: doc.chunk_level,
       }));
       await this.milvusManager.insert(rows);
+      processed += batch.length;
+      progressCallback?.(processed, total);
     }
   }
 }

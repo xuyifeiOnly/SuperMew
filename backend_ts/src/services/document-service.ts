@@ -27,6 +27,19 @@ export interface UploadedDocumentFile {
   buffer: Buffer;
 }
 
+export interface UploadProgressHooks {
+  onUploadSaved?: (filename: string, filePath: string) => void | Promise<void>;
+  onParseStart?: (filename: string) => void | Promise<void>;
+  onCleanupStart?: (filename: string) => void | Promise<void>;
+  onCleanupComplete?: (filename: string) => void | Promise<void>;
+  onParseComplete?: (filename: string, parentChunkCount: number, leafChunkCount: number) => void | Promise<void>;
+  onParentStoreStart?: (filename: string, parentChunkCount: number) => void | Promise<void>;
+  onParentStoreComplete?: (filename: string, parentChunkCount: number) => void | Promise<void>;
+  onVectorStoreStart?: (filename: string, leafChunkCount: number) => void | Promise<void>;
+  onVectorStoreProgress?: (filename: string, processed: number, total: number) => void | Promise<void>;
+  onVectorStoreComplete?: (filename: string, leafChunkCount: number) => void | Promise<void>;
+}
+
 const ensureSupportedFilename = (filename: string): string => {
   const normalized = path.basename(String(filename || ''));
   const lower = normalized.toLowerCase();
@@ -45,8 +58,9 @@ const splitDocumentsByLevel = (documents: LoadedDocumentChunk[]) => {
   return { parentDocs, leafDocs };
 };
 
-const replaceStoredDocument = async (filename: string, documents: LoadedDocumentChunk[], allowedRoles: string[]) => {
+const cleanupStoredDocument = async (filename: string, hooks?: UploadProgressHooks) => {
   const deleteExpr = `filename == "${quoteMilvusString(filename)}"`;
+  await hooks?.onCleanupStart?.(filename);
   try {
     await removeBm25StatsForFilename(filename);
   } catch {}
@@ -56,14 +70,29 @@ const replaceStoredDocument = async (filename: string, documents: LoadedDocument
   try {
     await parentChunkStore.deleteByFilename(filename);
   } catch {}
+  await hooks?.onCleanupComplete?.(filename);
+};
 
+const writeProcessedDocument = async (
+  filename: string,
+  documents: LoadedDocumentChunk[],
+  allowedRoles: string[],
+  hooks?: UploadProgressHooks,
+) => {
   const { parentDocs, leafDocs } = splitDocumentsByLevel(documents);
   if (!leafDocs.length) {
     throw new HttpError(500, `文档 ${filename} 处理失败，未生成可检索叶子分块`);
   }
+  await hooks?.onParseComplete?.(filename, parentDocs.length, leafDocs.length);
 
+  await hooks?.onParentStoreStart?.(filename, parentDocs.length);
   await parentChunkStore.upsertDocuments(parentDocs);
-  await milvusWriter.writeDocuments(leafDocs);
+  await hooks?.onParentStoreComplete?.(filename, parentDocs.length);
+  await hooks?.onVectorStoreStart?.(filename, leafDocs.length);
+  await milvusWriter.writeDocuments(leafDocs, 50, async (processed, total) => {
+    await hooks?.onVectorStoreProgress?.(filename, processed, total);
+  });
+  await hooks?.onVectorStoreComplete?.(filename, leafDocs.length);
   await setDocumentAllowedRoles(filename, allowedRoles);
 
   return {
@@ -99,7 +128,11 @@ export const listDocuments = async (): Promise<Array<{ filename: string; file_ty
   return [...fileStats.values()];
 };
 
-export const uploadDocument = async (file?: UploadedDocumentFile, allowedRolesInput?: unknown) => {
+export const uploadDocument = async (
+  file?: UploadedDocumentFile,
+  allowedRolesInput?: unknown,
+  hooks?: UploadProgressHooks,
+) => {
   if (!file) {
     throw new HttpError(400, '缺少上传文件');
   }
@@ -111,9 +144,12 @@ export const uploadDocument = async (file?: UploadedDocumentFile, allowedRolesIn
 
   const filePath = path.join(uploadDir, filename);
   fs.writeFileSync(filePath, file.buffer);
+  await hooks?.onUploadSaved?.(filename, filePath);
+  await cleanupStoredDocument(filename, hooks);
 
   let documents: LoadedDocumentChunk[];
   try {
+    await hooks?.onParseStart?.(filename);
     documents = await documentLoader.loadDocument(filePath, filename, file.buffer);
   } catch (error) {
     throw new HttpError(500, `文档处理失败: ${error instanceof Error ? error.message : String(error)}`);
@@ -121,7 +157,7 @@ export const uploadDocument = async (file?: UploadedDocumentFile, allowedRolesIn
   if (!documents.length) {
     throw new HttpError(500, '文档处理失败，未能提取内容');
   }
-  const result = await replaceStoredDocument(filename, documents, allowedRoles);
+  const result = await writeProcessedDocument(filename, documents, allowedRoles, hooks);
 
   return {
     filename,
@@ -182,7 +218,8 @@ export const importDocumentsFromFolder = async (rawFolderPath: string, allowedRo
       ...doc,
       file_path: targetPath,
     }));
-    const result = await replaceStoredDocument(filename, normalizedDocuments, allowedRoles);
+    await cleanupStoredDocument(filename);
+    const result = await writeProcessedDocument(filename, normalizedDocuments, allowedRoles);
     imported.push({
       filename,
       leaf_chunks: result.leafChunkCount,
