@@ -178,7 +178,7 @@ export class RagService {
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${env.rerankApiKey}`,
-        },
+        }, 
         body: JSON.stringify({
           model: env.rerankModel,
           query,

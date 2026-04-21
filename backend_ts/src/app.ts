@@ -24,7 +24,7 @@ export const createApp = (): Koa<AppState> => {
       allowHeaders: ['*'],
     }),
   );
-  app.use(bodyParser({ enableTypes: ['json'] }));
+  app.use(bodyParser({ enableTypes: ['json', 'form'] }));
   app.use(noCacheMiddleware);
   app.use(apiRouter.routes());
   app.use(apiRouter.allowedMethods());

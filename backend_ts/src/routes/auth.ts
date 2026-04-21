@@ -16,15 +16,27 @@ import { z } from 'zod';
 const router = new Router<AppState>();
 
 const registerSchema = z.object({
-  username: z.string().trim().min(1, '用户名不能为空'),
-  password: z.string().trim().min(1, '密码不能为空'),
+  username: z
+    .string({ required_error: '用户名不能为空', invalid_type_error: '用户名不能为空' })
+    .trim()
+    .min(1, '用户名不能为空'),
+  password: z
+    .string({ required_error: '密码不能为空', invalid_type_error: '密码不能为空' })
+    .trim()
+    .min(1, '密码不能为空'),
   roles: z.union([z.array(z.string()), z.string()]).optional(),
   admin_code: z.string().optional().nullable(),
 });
 
 const loginSchema = z.object({
-  username: z.string().trim().min(1, '用户名不能为空'),
-  password: z.string().trim().min(1, '密码不能为空'),
+  username: z
+    .string({ required_error: '用户名不能为空', invalid_type_error: '用户名不能为空' })
+    .trim()
+    .min(1, '用户名不能为空'),
+  password: z
+    .string({ required_error: '密码不能为空', invalid_type_error: '密码不能为空' })
+    .trim()
+    .min(1, '密码不能为空'),
 });
 
 router.post('/auth/register', async (ctx) => {
@@ -33,7 +45,6 @@ router.post('/auth/register', async (ctx) => {
   if (exists) {
     throw new HttpError(409, '用户名已存在');
   }
-
   const roles = resolveRoles(payload.roles, payload.admin_code);
   const user = await User.create({
     username: payload.username,
