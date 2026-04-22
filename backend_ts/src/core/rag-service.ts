@@ -15,12 +15,20 @@ const formatDocs = (docs: RetrievedChunk[]): string =>
     )
     .join('\n\n---\n\n');
 
+const DEFAULT_BIGMODEL_RERANK_ENDPOINT = 'https://open.bigmodel.cn/api/paas/v4/rerank';
+
 const getRerankEndpoint = (): string => {
-  if (!env.rerankBindingHost) {
-    return '';
-  }
   const host = env.rerankBindingHost.replace(/\/+$/, '');
-  return host.endsWith('/v1/rerank') ? host : `${host}/v1/rerank`;
+  if (!host) {
+    return DEFAULT_BIGMODEL_RERANK_ENDPOINT;
+  }
+  if (host.endsWith('/paas/v4/rerank')) {
+    return host;
+  }
+  if (host.endsWith('/api')) {
+    return `${host}/paas/v4/rerank`;
+  }
+  return `${host}/paas/v4/rerank`;
 };
 
 const formatRerankError = (error: unknown): string => {
@@ -43,6 +51,9 @@ const formatRerankError = (error: unknown): string => {
   }
   if (raw.startsWith('HTTP ')) {
     return `Rerank 服务请求失败：${raw}`;
+  }
+  if (raw.includes('"error"') || raw.includes('"message"')) {
+    return `Rerank 服务返回异常：${raw}`;
   }
   return `Rerank 执行异常：${raw}`;
 };
@@ -159,11 +170,13 @@ export class RagService {
     topK: number,
   ): Promise<{ docs: RetrievedChunk[]; meta: JsonObject }> {
     const docsWithRank = docs.map((doc, index) => ({ ...doc, rrf_rank: index + 1 }));
+    const rerankEndpoint = getRerankEndpoint();
+    const rerankModel = env.rerankModel || 'rerank';
     const meta: JsonObject = {
-      rerank_enabled: Boolean(env.rerankModel && env.rerankApiKey && env.rerankBindingHost),
+      rerank_enabled: Boolean(env.rerankApiKey),
       rerank_applied: false,
-      rerank_model: env.rerankModel || null,
-      rerank_endpoint: getRerankEndpoint() || null,
+      rerank_model: rerankModel,
+      rerank_endpoint: rerankEndpoint || null,
       rerank_error: null,
       candidate_count: docsWithRank.length,
     };
@@ -173,18 +186,19 @@ export class RagService {
     }
 
     try {
-      const response = await fetch(getRerankEndpoint(), {
+      const response = await fetch(rerankEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${env.rerankApiKey}`,
-        }, 
+        },
         body: JSON.stringify({
-          model: env.rerankModel,
+          model: rerankModel,
           query,
           documents: docsWithRank.map((item) => item.text ?? ''),
           top_n: Math.min(topK, docsWithRank.length),
           return_documents: false,
+          return_raw_scores: false,
         }),
       });
       meta.rerank_applied = true;
@@ -192,7 +206,21 @@ export class RagService {
         meta.rerank_error = formatRerankError(`HTTP ${response.status}: ${await response.text()}`);
         return { docs: docsWithRank.slice(0, topK), meta };
       }
-      const payload = (await response.json()) as { results?: Array<{ index?: number; relevance_score?: number }> };
+      const payload = (await response.json()) as {
+        id?: string;
+        request_id?: string;
+        usage?: { prompt_tokens?: number; total_tokens?: number };
+        results?: Array<{ index?: number; relevance_score?: number; document?: string }>;
+        error?: { code?: string; message?: string };
+      };
+      if (payload.error?.message) {
+        meta.rerank_error = formatRerankError(
+          `${payload.error.code || 'error'}: ${payload.error.message}`,
+        );
+        return { docs: docsWithRank.slice(0, topK), meta };
+      }
+      meta.rerank_request_id = payload.request_id || payload.id || null;
+      meta.rerank_usage = payload.usage ?? null;
       const reranked = (payload.results ?? [])
         .map((item) => {
           const idx = Number(item.index);
@@ -436,9 +464,9 @@ export class RagService {
         return {
           docs: [],
           meta: {
-            rerank_enabled: Boolean(env.rerankModel && env.rerankApiKey && env.rerankBindingHost),
+            rerank_enabled: Boolean(env.rerankApiKey),
             rerank_applied: false,
-            rerank_model: env.rerankModel || null,
+            rerank_model: env.rerankModel || 'rerank',
             rerank_endpoint: getRerankEndpoint() || null,
             rerank_error: formatRerankError('retrieve_failed'),
             retrieval_mode: 'failed',
