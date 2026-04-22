@@ -21,6 +21,8 @@ createApp({
             uploadProgressCollapsed: false,
             activeUploadJobId: '',
             uploadPollTimer: null,
+            richTextContent: '',
+            textDocFilename: '',
             deleteJobs: {},
             deletePollTimers: {},
             deleteRemoveTimers: {},
@@ -470,6 +472,10 @@ createApp({
             }
         },
 
+        handleRichTextInput(event) {
+            this.richTextContent = (event?.target?.innerText || '').trim();
+        },
+
         createUploadSteps() {
             return [
                 { key: 'upload', label: '文档上传', percent: 0, status: 'pending', message: '' },
@@ -626,6 +632,48 @@ createApp({
             } catch (error) {
                 this.updateUploadStep('upload', 100, 'failed', error.message);
                 this.uploadProgress = '上传失败：' + error.message;
+                this.isUploading = false;
+            }
+        },
+
+        async uploadRichTextDocument() {
+            if (this.isUploading) {
+                return;
+            }
+            const content = (this.richTextContent || '').trim();
+            if (!content) {
+                alert('请输入要解析的文本内容');
+                return;
+            }
+
+            this.isUploading = true;
+            this.uploadProgress = '正在提交文本...';
+            this.uploadSteps = this.createUploadSteps();
+            this.uploadProgressCollapsed = false;
+            this.updateUploadStep('upload', 30, 'running', '正在提交文本内容');
+
+            try {
+                const response = await this.authFetch('/documents/text/async', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        content,
+                        filename: this.textDocFilename
+                    })
+                });
+
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    throw new Error(data.detail || '文本提交失败');
+                }
+
+                this.updateUploadStep('upload', 100, 'completed', '文本提交完成');
+                this.uploadProgress = data.message || '文本提交成功，正在后台处理';
+                this.activeUploadJobId = data.job_id;
+                this.startUploadJobPolling(data.job_id);
+            } catch (error) {
+                this.updateUploadStep('upload', 100, 'failed', error.message);
+                this.uploadProgress = '提交失败：' + error.message;
                 this.isUploading = false;
             }
         },

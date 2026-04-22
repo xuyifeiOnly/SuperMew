@@ -54,6 +54,14 @@ const formatDateValue = (value: Date): string => {
 const isNumericLike = (value: string): boolean => /^[-+]?\d+(?:\.\d+)?$/.test(value);
 
 export class DocumentLoaderService {
+  private buildTextFilename(rawFilename: string): string {
+    const normalized = path.basename(String(rawFilename ?? '').trim());
+    if (!normalized) {
+      return `text_${Date.now()}.txt`;
+    }
+    return normalized.toLowerCase().endsWith('.txt') ? normalized : `${normalized}.txt`;
+  }
+
   private formatExcelCell(value: unknown, cell: XLSX.CellObject | undefined): string {
     if (value == null) {
       return '';
@@ -369,6 +377,28 @@ export class DocumentLoaderService {
       const baseDoc = {
         filename,
         file_type: fileType,
+        file_path: filePath,
+        page_number: page.pageNumber,
+      };
+      const chunks = this.splitPageToThreeLevels(page.text, baseDoc, pageGlobalChunkIndex);
+      pageGlobalChunkIndex += chunks.length;
+      documents.push(...chunks);
+    }
+    return documents;
+  }
+
+  loadPlainText(rawText: string, rawFilename: string, filePath: string): LoadedDocumentChunk[] {
+    const filename = this.buildTextFilename(rawFilename);
+    const normalized = normalizeText(String(rawText ?? ''));
+    const pages = this.splitTextByPageBreak(normalized);
+    const safePages = pages.length ? pages : [{ pageNumber: 1, text: normalized }];
+
+    const documents: LoadedDocumentChunk[] = [];
+    let pageGlobalChunkIndex = 0;
+    for (const page of safePages) {
+      const baseDoc = {
+        filename,
+        file_type: 'Text',
         file_path: filePath,
         page_number: page.pageNumber,
       };

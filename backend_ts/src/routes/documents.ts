@@ -10,6 +10,7 @@ import {
   resetDocumentCollection,
   type UploadedDocumentFile,
   uploadDocument,
+  uploadTextDocument,
 } from '../services/document-service.js';
 import type { AppState } from '../types/koa.js';
 
@@ -178,6 +179,74 @@ const runUploadJob = async (jobId: string, file: UploadedDocumentFile, allowedRo
   }
 };
 
+const runTextUploadJob = async (
+  jobId: string,
+  text: string,
+  filename: string,
+  allowedRolesInput?: unknown,
+) => {
+  const job = uploadJobManager.get(jobId);
+  if (!job) {
+    return;
+  }
+
+  try {
+    completeUploadStep(job, 'upload', '文本已提交，等待后台处理');
+    const result = await uploadTextDocument(text, filename, allowedRolesInput, {
+      onCleanupStart: () => {
+        updateUploadStep(job, 'cleanup', 10, 'running', '正在清理同名旧文档');
+      },
+      onCleanupComplete: () => {
+        completeUploadStep(job, 'cleanup', '旧版本清理完成');
+      },
+      onParseStart: () => {
+        updateUploadStep(job, 'parse', 5, 'running', '正在解析文本并执行三级分块');
+      },
+      onParseComplete: (_filename, parentChunkCount, leafChunkCount) => {
+        completeUploadStep(job, 'parse', `解析完成：父级分块 ${parentChunkCount} 个，叶子分块 ${leafChunkCount} 个`);
+      },
+      onParentStoreStart: (_filename, parentChunkCount) => {
+        updateUploadStep(job, 'parent_store', 20, 'running', `正在写入父级分块（${parentChunkCount} 个）`);
+      },
+      onParentStoreComplete: (_filename, parentChunkCount) => {
+        completeUploadStep(job, 'parent_store', `父级分块已入库：${parentChunkCount} 个`);
+      },
+      onVectorStoreStart: (_filename, leafChunkCount) => {
+        updateUploadStep(
+          job,
+          'vector_store',
+          0,
+          'running',
+          `正在向量化入库：0 / ${leafChunkCount}`,
+          leafChunkCount,
+          0,
+        );
+      },
+      onVectorStoreProgress: (_filename, processed, total) => {
+        const percent = total > 0 ? Math.round((processed * 100) / total) : 100;
+        updateUploadStep(job, 'vector_store', percent, 'running', `正在向量化入库：${processed} / ${total}`, total, processed);
+      },
+      onVectorStoreComplete: (_filename, leafChunkCount) => {
+        completeUploadStep(job, 'vector_store', `向量化入库完成：${leafChunkCount} 个叶子分块`);
+      },
+    });
+    job.steps = job.steps.map((step) => ({
+      ...step,
+      percent: step.status === 'failed' ? step.percent : 100,
+      status: step.status === 'failed' ? step.status : 'completed',
+    }));
+    job.status = 'completed';
+    job.current_step = 'vector_store';
+    job.message = result?.message || `成功解析并处理 ${job.filename}`;
+    job.error = null;
+    job.updated_at = nowIso();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const failedStep = job.steps.find((step) => step.status === 'running')?.key ?? job.current_step ?? 'cleanup';
+    failUploadJob(job, failedStep, message);
+  }
+};
+
 const createDeleteSteps = (): DeleteJobStep[] => [
   { key: 'prepare', label: '准备删除', percent: 0, status: 'pending', message: '' },
   { key: 'bm25', label: '同步 BM25 统计', percent: 0, status: 'pending', message: '' },
@@ -290,6 +359,45 @@ router.post('/documents/upload/async', upload.single('file'), async (ctx) => {
     job_id: jobId,
     filename,
     message: '文件已上传，正在后台解析和向量化入库',
+  };
+});
+
+router.post('/documents/text/async', async (ctx) => {
+  await requireAdmin(ctx);
+  uploadJobManager.cleanupExpired();
+  const body = (ctx.request as {
+    body?: { content?: unknown; filename?: unknown; allowed_roles?: unknown };
+  }).body;
+  const text = String(body?.content ?? '').trim();
+  const filename = path.basename(String(body?.filename ?? '')).trim() || `text_${Date.now()}.txt`;
+  if (!text) {
+    ctx.status = 400;
+    ctx.body = { detail: '文本内容不能为空' };
+    return;
+  }
+
+  const jobId = createJobId();
+  const createdAt = nowIso();
+  const job: UploadJob = {
+    job_id: jobId,
+    filename,
+    status: 'pending',
+    current_step: 'upload',
+    message: '等待提交文本',
+    total_chunks: 0,
+    processed_chunks: 0,
+    error: null,
+    steps: createUploadSteps(),
+    created_at: createdAt,
+    updated_at: createdAt,
+  };
+  uploadJobManager.set(job);
+  updateUploadStep(job, 'upload', 1, 'running', '正在提交文本内容');
+  void runTextUploadJob(jobId, text, filename, body?.allowed_roles);
+  ctx.body = {
+    job_id: jobId,
+    filename,
+    message: '文本已提交，正在后台解析和向量化入库',
   };
 });
 

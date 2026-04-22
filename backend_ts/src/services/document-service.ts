@@ -52,6 +52,14 @@ const ensureSupportedFilename = (filename: string): string => {
   return normalized;
 };
 
+const normalizeTextFilename = (rawFilename: string): string => {
+  const normalized = path.basename(String(rawFilename ?? '').trim());
+  if (!normalized) {
+    return `text_${Date.now()}.txt`;
+  }
+  return normalized.toLowerCase().endsWith('.txt') ? normalized : `${normalized}.txt`;
+};
+
 const splitDocumentsByLevel = (documents: LoadedDocumentChunk[]) => {
   const parentDocs = documents.filter((item) => item.chunk_level === 1 || item.chunk_level === 2);
   const leafDocs = documents.filter((item) => item.chunk_level === 3);
@@ -165,6 +173,48 @@ export const uploadDocument = async (
     chunks_processed: result.leafChunkCount,
     parent_chunks_processed: result.parentChunkCount,
     message: `成功上传并处理 ${filename}，叶子分块 ${result.leafChunkCount} 个，父级分块 ${result.parentChunkCount} 个（存入 PostgreSQL）`,
+  };
+};
+
+export const uploadTextDocument = async (
+  rawText: unknown,
+  rawFilename: unknown,
+  allowedRolesInput?: unknown,
+  hooks?: UploadProgressHooks,
+) => {
+  const text = String(rawText ?? '').trim();
+  if (!text) {
+    throw new HttpError(400, '文本内容不能为空');
+  }
+
+  const filename = normalizeTextFilename(String(rawFilename ?? ''));
+  const allowedRoles = parseAllowedRoles(allowedRolesInput);
+  fs.mkdirSync(uploadDir, { recursive: true });
+  await milvusManager.ensureCollection();
+
+  const filePath = path.join(uploadDir, filename);
+  fs.writeFileSync(filePath, `${text}\n`, 'utf-8');
+  await hooks?.onUploadSaved?.(filename, filePath);
+  await cleanupStoredDocument(filename, hooks);
+
+  await hooks?.onParseStart?.(filename);
+  let documents: LoadedDocumentChunk[];
+  try {
+    documents = documentLoader.loadPlainText(text, filename, filePath);
+  } catch (error) {
+    throw new HttpError(500, `文本解析失败: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!documents.length) {
+    throw new HttpError(500, '文本解析失败，未能提取可用内容');
+  }
+  const result = await writeProcessedDocument(filename, documents, allowedRoles, hooks);
+
+  return {
+    filename,
+    allowed_roles: allowedRoles,
+    chunks_processed: result.leafChunkCount,
+    parent_chunks_processed: result.parentChunkCount,
+    message: `成功解析并入库 ${filename}，叶子分块 ${result.leafChunkCount} 个，父级分块 ${result.parentChunkCount} 个（存入 PostgreSQL）`,
   };
 };
 

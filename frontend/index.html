@@ -126,6 +126,29 @@
                     </div>
                 </div>
 
+                <div class="upload-section">
+                    <h3><i class="fas fa-pen-to-square"></i> 富文本直传</h3>
+                    <div class="upload-area">
+                        <input
+                            v-model="textDocFilename"
+                            type="text"
+                            class="rich-text-filename"
+                            placeholder="文档名（可选，默认自动生成 .txt）"
+                            :disabled="isUploading"
+                        />
+                        <div
+                            ref="richTextEditor"
+                            class="rich-text-editor"
+                            contenteditable="true"
+                            @input="handleRichTextInput"
+                            data-placeholder="在这里输入文本内容，可直接粘贴富文本后提交解析..."
+                        ></div>
+                        <button @click="uploadRichTextDocument" class="btn-primary" :disabled="isUploading">
+                            <i class="fas fa-paper-plane"></i> {{ isUploading ? '提交中...' : '提交文本并解析' }}
+                        </button>
+                    </div>
+                </div>
+
                 <div class="documents-section">
                     <h3><i class="fas fa-list"></i> 已上传文档</h3>
                     <button @click="loadDocuments" class="btn-secondary">
