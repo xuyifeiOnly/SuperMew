@@ -49,7 +49,7 @@ export const env = {
   jwtSecretKey: readString('JWT_SECRET_KEY', 'change-this-secret'),
   jwtAlgorithm: readString('JWT_ALGORITHM', 'HS256'),
   jwtExpireMinutes: readNumber('JWT_EXPIRE_MINUTES', 1440),
-  adminInviteCode: readString('ADMIN_INVITE_CODE', ''),
+  adminInviteCode: readString('ADMIN_INVITE_CODE', 'supermew-admin-2026'),
   passwordPbkdf2Rounds: readNumber('PASSWORD_PBKDF2_ROUNDS', 310000),
   arkApiKey: readString('ARK_API_KEY', ''),
   model: readString('MODEL', ''),

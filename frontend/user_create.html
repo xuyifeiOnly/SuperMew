@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>添加用户 - SuperMew</title>
+    <link rel="stylesheet" href="user_create.css">
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Zcool+KuaiLe&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="page-shell">
+        <div class="panel">
+            <div class="panel-head">
+                <div class="brand">
+                    <span class="brand-icon">🐱</span>
+                    <div class="brand-meta">
+                        <div class="brand-title">SuperMew</div>
+                        <div class="brand-sub">用户创建</div>
+                    </div>
+                </div>
+                <a class="back-link" href="./index.html"><i class="fas fa-arrow-left"></i> 返回主页面</a>
+            </div>
+
+            <div class="panel-body">
+                <div class="hint">初始化阶段无需登录即可创建用户；如需创建管理员，请在下方选择“管理员”并填写管理员邀请码。</div>
+
+                <div class="block">
+                    <div class="block-title"><i class="fas fa-user-plus"></i> 添加用户</div>
+                    <div class="grid grid-2">
+                        <label class="field">
+                            <span class="field-label">用户名</span>
+                            <input id="newUsername" class="field-input" type="text" placeholder="例如：alice" />
+                        </label>
+                        <label class="field">
+                            <span class="field-label">密码</span>
+                            <input id="newPassword" class="field-input" type="password" placeholder="请输入密码" />
+                        </label>
+                        <label class="field">
+                            <span class="field-label">角色</span>
+                            <select id="newRole" class="field-input">
+                                <option value="user">普通用户</option>
+                                <option value="admin">管理员</option>
+                            </select>
+                        </label>
+                        <label class="field" id="adminCodeWrap" style="display:none">
+                            <span class="field-label">管理员邀请码</span>
+                            <input id="adminCode" class="field-input" type="password" placeholder="创建管理员时必填" />
+                        </label>
+                    </div>
+
+                    <div class="actions">
+                        <button id="createBtn" class="btn btn-primary" type="button">
+                            <i class="fas fa-plus"></i> 创建用户
+                        </button>
+                        <button id="copyBtn" class="btn btn-ghost" type="button" disabled>
+                            <i class="fas fa-copy"></i> 复制新用户 Token
+                        </button>
+                    </div>
+
+                    <pre id="resultBox" class="result-box" aria-live="polite"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="user_create.js"></script>
+</body>
+</html>

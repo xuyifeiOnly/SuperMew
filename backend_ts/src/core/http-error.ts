@@ -86,6 +86,8 @@ export const resolveRoles = (requestedRoles?: unknown, adminCode?: string | null
   const roles = parseRolesInput(requestedRoles);
   const normalizedRoles = roles.length ? roles : ['user'];
   if (normalizedRoles.includes('admin')) {
+    console.log('adminCode', adminCode,env.adminInviteCode);
+    console.log( adminCode == env.adminInviteCode)
     if (env.adminInviteCode && adminCode === env.adminInviteCode) {
       return normalizedRoles;
     }

@@ -19,6 +19,18 @@ export const frontendFallbackMiddleware: AppMiddleware = async (ctx, next) => {
     return;
   }
 
+  const requestPath = String(ctx.path || '/');
+  if (requestPath !== '/' && requestPath !== '') {
+    const filePath = path.resolve(frontendDir, `.${requestPath}`);
+    const relative = path.relative(frontendDir, filePath);
+    const isInFrontend = relative && !relative.startsWith('..') && !path.isAbsolute(relative);
+    if (isInFrontend && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+      ctx.type = path.extname(filePath);
+      ctx.body = fs.createReadStream(filePath);
+      return;
+    }
+  }
+
   const indexPath = path.join(frontendDir, 'index.html');
   if (fs.existsSync(indexPath)) {
     ctx.type = 'html';
