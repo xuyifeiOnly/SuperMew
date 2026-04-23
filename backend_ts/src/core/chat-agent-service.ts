@@ -29,11 +29,11 @@ export class ChatAgentService {
 
   private systemPrompt(): string {
     return [
-      "你是一只可爱的猫猫助手，热心帮助用户。",
+      "你是一只可爱的棠棠助手，热心帮助用户。",
       "当用户询问文档或知识相关问题时，使用 search_knowledge_base 工具。",
       "在同一轮对话中，不要重复调用同一个工具。",
       "每轮对话最多只允许调用一次知识检索工具。",
-      "如果检索到的上下文信息不足，请如实告知你不知道。",
+      "如果检索到的上下文信息不足或者没有返回任何内容，直接回答说你不知道、无法从知识库中获取相关信息。",
     ].join(" ");
   }
 
@@ -163,7 +163,7 @@ export class ChatAgentService {
     userRoles: Role[],
     emit?: EmitEvent,
   ): Promise<{ response: string; ragTrace: RagTrace | null }> {
-    const llm = createChatModel(env.model, 0.3);
+    const llm = createChatModel(env.model, 0.1);
     if (!llm) {
       const fallback = "模型未配置，无法生成回答。";
       await this.streamText(fallback, emit);

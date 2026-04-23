@@ -65,6 +65,8 @@ export const env = {
   rerankModel: readString('RERANK_MODEL', ''),
   rerankBindingHost: readString('RERANK_BINDING_HOST', ''),
   rerankApiKey: readString('RERANK_API_KEY', ''),
+  rerankTimeoutMs: readNumber('RERANK_TIMEOUT_MS', 8000),
+  rerankCooldownSeconds: readNumber('RERANK_COOLDOWN_SECONDS', 60),
   autoMergeEnabled: readBoolean('AUTO_MERGE_ENABLED', true),
   autoMergeThreshold: readNumber('AUTO_MERGE_THRESHOLD', 2),
   leafRetrieveLevel: readNumber('LEAF_RETRIEVE_LEVEL', 3),
