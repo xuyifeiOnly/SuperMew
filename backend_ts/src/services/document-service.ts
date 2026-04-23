@@ -46,8 +46,17 @@ const ensureSupportedFilename = (filename: string): string => {
   if (!normalized) {
     throw new HttpError(400, '文件名不能为空');
   }
-  if (!(lower.endsWith('.pdf') || lower.endsWith('.docx') || lower.endsWith('.doc') || lower.endsWith('.xlsx') || lower.endsWith('.xls'))) {
-    throw new HttpError(400, '仅支持 PDF、Word 和 Excel 文档');
+  if (
+    !(
+      lower.endsWith('.pdf') ||
+      lower.endsWith('.docx') ||
+      lower.endsWith('.doc') ||
+      lower.endsWith('.xlsx') ||
+      lower.endsWith('.xls') ||
+      lower.endsWith('.txt')
+    )
+  ) {
+    throw new HttpError(400, '仅支持 PDF、Word、Excel 和 TXT 文档');
   }
   return normalized;
 };

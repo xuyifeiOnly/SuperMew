@@ -969,6 +969,32 @@ textarea {
     transform: none;
 }
 
+.btn-download {
+    background-color: #4dabf7;
+    color: var(--white);
+    border: none;
+    padding: 8px 15px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: var(--transition);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.btn-download:hover:not(:disabled) {
+    background-color: #339af0;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(77, 171, 247, 0.35);
+}
+
+.btn-download:disabled {
+    cursor: not-allowed;
+    opacity: 0.75;
+    transform: none;
+}
+
 .upload-progress {
     padding: 12px;
     background-color: var(--accent-color);
@@ -1152,6 +1178,13 @@ textarea {
     justify-content: space-between;
     gap: 12px;
     width: 100%;
+}
+
+.document-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    flex: 0 0 auto;
 }
 
 .delete-progress {

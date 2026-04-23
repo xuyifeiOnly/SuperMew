@@ -62,6 +62,25 @@ export class DocumentLoaderService {
     return normalized.toLowerCase().endsWith('.txt') ? normalized : `${normalized}.txt`;
   }
 
+  private decodeTextBuffer(buffer: Buffer): string {
+    if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
+      return buffer.subarray(3).toString('utf-8');
+    }
+    if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
+      return buffer.subarray(2).toString('utf16le');
+    }
+    if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
+      const sliced = buffer.subarray(2);
+      const swapped = Buffer.allocUnsafe(sliced.length);
+      for (let i = 0; i < sliced.length; i += 2) {
+        swapped[i] = sliced[i + 1] ?? 0;
+        swapped[i + 1] = sliced[i] ?? 0;
+      }
+      return swapped.toString('utf16le');
+    }
+    return buffer.toString('utf-8');
+  }
+
   private formatExcelCell(value: unknown, cell: XLSX.CellObject | undefined): string {
     if (value == null) {
       return '';
@@ -367,6 +386,13 @@ export class DocumentLoaderService {
     } else if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
       fileType = 'Excel';
       pages = [{ pageNumber: 1, text: this.normalizeWorkbook(buffer) }];
+    } else if (lower.endsWith('.txt')) {
+      fileType = 'Text';
+      const text = this.decodeTextBuffer(buffer);
+      pages = this.splitTextByPageBreak(text);
+      if (!pages.length) {
+        pages = [{ pageNumber: 1, text: normalizeText(text) }];
+      }
     } else {
       throw new Error(`不支持的文件类型: ${filename}`);
     }
@@ -419,7 +445,16 @@ export class DocumentLoaderService {
       }
       const filename = entry.name;
       const lower = filename.toLowerCase();
-      if (!(lower.endsWith('.pdf') || lower.endsWith('.docx') || lower.endsWith('.doc') || lower.endsWith('.xlsx') || lower.endsWith('.xls'))) {
+      if (
+        !(
+          lower.endsWith('.pdf') ||
+          lower.endsWith('.docx') ||
+          lower.endsWith('.doc') ||
+          lower.endsWith('.xlsx') ||
+          lower.endsWith('.xls') ||
+          lower.endsWith('.txt')
+        )
+      ) {
         continue;
       }
 

@@ -1,7 +1,9 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import multer from '@koa/multer';
 import Router from '@koa/router';
 import { createJobId, InMemoryJobManager, nowIso } from '../core/job-manager.js';
+import { uploadDir } from '../config.js';
 import { requireAdmin } from '../middleware/index.js';
 import {
   deleteDocument,
@@ -319,6 +321,36 @@ const runDeleteJob = async (jobId: string, filename: string) => {
 router.get('/documents', async (ctx) => {
   await requireAdmin(ctx);
   ctx.body = { documents: await listDocuments() };
+});
+
+router.get('/documents/download/:filename', async (ctx) => {
+  await requireAdmin(ctx);
+  const filename = path.basename(String(ctx.params.filename ?? ''));
+  if (!filename) {
+    ctx.status = 400;
+    ctx.body = { detail: '文件名不能为空' };
+    return;
+  }
+
+  const resolvedUploadDir = path.resolve(uploadDir);
+  const targetPath = path.resolve(resolvedUploadDir, filename);
+  const relative = path.relative(resolvedUploadDir, targetPath);
+  const isWithinUploadDir = relative && !relative.startsWith('..') && !path.isAbsolute(relative);
+  if (!isWithinUploadDir) {
+    ctx.status = 400;
+    ctx.body = { detail: '非法文件路径' };
+    return;
+  }
+  if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isFile()) {
+    ctx.status = 404;
+    ctx.body = { detail: '文件不存在' };
+    return;
+  }
+
+  ctx.set('Cache-Control', 'no-store');
+  ctx.attachment(filename);
+  ctx.type = path.extname(filename);
+  ctx.body = fs.createReadStream(targetPath);
 });
 
 router.post('/documents/upload/async', upload.single('file'), async (ctx) => {

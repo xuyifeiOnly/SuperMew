@@ -887,6 +887,32 @@ createApp({
             }
         },
 
+        async downloadDocument(filename) {
+            const safeName = (filename || '').trim();
+            if (!safeName) {
+                alert('文件名不能为空');
+                return;
+            }
+            try {
+                const response = await this.authFetch(`/documents/download/${encodeURIComponent(safeName)}`);
+                if (!response.ok) {
+                    const error = await response.json().catch(() => ({}));
+                    throw new Error(error.detail || '下载失败');
+                }
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const anchor = document.createElement('a');
+                anchor.href = url;
+                anchor.download = safeName;
+                document.body.appendChild(anchor);
+                anchor.click();
+                anchor.remove();
+                window.URL.revokeObjectURL(url);
+            } catch (error) {
+                alert('下载文档失败：' + error.message);
+            }
+        },
+
         getFileIcon(fileType) {
             if (fileType === 'PDF') {
                 return 'fas fa-file-pdf';

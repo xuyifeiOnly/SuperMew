@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from agent import chat_with_agent, chat_with_agent_stream, storage
@@ -507,3 +507,14 @@ async def delete_document(filename: str, _: User = Depends(require_admin)):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"删除文档失败: {str(e)}")
+
+
+@router.get("/documents/download/{filename}")
+async def download_document(filename: str, _: User = Depends(require_admin)):
+    safe_name = Path(filename).name
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="文件名不能为空")
+    file_path = UPLOAD_DIR / safe_name
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return FileResponse(path=str(file_path), filename=safe_name, media_type="application/octet-stream")

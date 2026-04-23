@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>喵喵智能助手</title>
+    <title>棠棠智能助手</title>
     <link rel="stylesheet" href="style.css">
     <!-- Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Zcool+KuaiLe&display=swap" rel="stylesheet">
@@ -24,7 +24,7 @@
         <aside class="sidebar">
             <div class="sidebar-header">
                 <div class="logo-icon">🐱</div>
-                <h2>喵喵助手</h2>
+                <h2>棠棠助手</h2>
             </div>
             <nav class="sidebar-nav">
                 <button @click="handleNewChat" :class="['nav-btn', {active: activeNav === 'newChat'}]">
@@ -185,14 +185,24 @@
                                             </div>
                                         </div>
                                     </div>
-                                    <button 
-                                        @click="deleteDocument(doc.filename)" 
-                                        class="btn-danger"
-                                        title="删除文档"
-                                        :disabled="isDeleteActionLocked(doc.filename)"
-                                    >
-                                        <i :class="getDeleteButtonIcon(doc.filename)"></i>
-                                    </button>
+                                    <div class="document-actions">
+                                        <button
+                                            @click="downloadDocument(doc.filename)"
+                                            class="btn-download"
+                                            title="下载文档"
+                                            :disabled="isDeletingDocument(doc.filename)"
+                                        >
+                                            <i class="fas fa-download"></i>
+                                        </button>
+                                        <button 
+                                            @click="deleteDocument(doc.filename)" 
+                                            class="btn-danger"
+                                            title="删除文档"
+                                            :disabled="isDeleteActionLocked(doc.filename)"
+                                        >
+                                            <i :class="getDeleteButtonIcon(doc.filename)"></i>
+                                        </button>
+                                    </div>
                                 </div>
 
                                 <div
@@ -271,7 +281,7 @@
                 <header class="chat-header">
                     <div class="header-info">
                         <div class="status-dot"></div>
-                        <span>喵喵在线中...</span>
+                        <span>棠棠在线中...</span>
                     </div>
                     <div class="header-actions">
                         <button class="icon-btn" title="更多"><i class="fas fa-ellipsis-h"></i></button>
@@ -281,7 +291,7 @@
                 <div class="chat-container" ref="chatContainer">
                 <div v-if="messages.length === 0" class="welcome-screen">
                     <div class="big-avatar">🐱</div>
-                    <h3>你好呀！我是喵喵</h3>
+                    <h3>你好呀！我是棠棠</h3>
                     <p>我可以帮你写代码、回答问题，或者只是陪你聊天~ 喵！</p>
                 </div>
                 
@@ -446,7 +456,7 @@
                         @compositionstart="handleCompositionStart"
                         @compositionend="handleCompositionEnd"
                         @input="autoResize"
-                        placeholder="和喵喵说点什么吧... (Shift+Enter 换行)" 
+                        placeholder="和棠棠说点什么吧... (Shift+Enter 换行)" 
                         rows="1"
                         ref="textarea"
                     ></textarea>
