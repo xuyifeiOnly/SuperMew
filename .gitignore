@@ -9,7 +9,8 @@ wheels/
 .venv
 .env    
 **/node_modules/
-
+backend_ts/node_modules/
+backend_ts/test
 #docker files
 volumes/
 

@@ -10,7 +10,7 @@
     "start": "pnpm build && node dist/server.js",
     "dev:debug:dist": "pnpm build && node --inspect=9229 --enable-source-maps dist/server.js",
     "build": "tsc -p tsconfig.json",
-    "ceshi": "bun run ./ceshi/iterator.ts"
+    "test": "bun run ./test/index.ts"
   },
   "nodemonConfig": {
     "watch": [
