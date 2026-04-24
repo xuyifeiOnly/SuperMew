@@ -13,6 +13,7 @@ import {
   promptModelText,
   tokenize,
 } from "./shared.js";
+import { multiQueryRetrieveByMilvus } from "../services/multi_query_tools.js";
 
 const formatDocs = (docs: RetrievedChunk[]): string =>
   docs
@@ -490,20 +491,30 @@ export class RagService {
     );
     const filterExpr = accessFilter.filterExpr;
     try {
-      await this.milvusManager.ensureCollection();
-      // 将用户 query 转成 dense 向量（语义向量），用于 Milvus 的 dense_embedding 近邻检索召回候选。
-      const denseEmbedding = (
-        await this.embeddingService.getEmbeddings([query])
-      )[0];
-      // 将同一个 query 转成 sparse 向量（BM25 风格稀疏向量），用于 sparse_embedding 关键词/词项召回。
-      const sparseEmbedding = this.embeddingService.getSparseEmbedding(query);
-      // 进行 hybrid 检索：dense + sparse 两路召回后用 RRF 融合排序，得到候选集合（数量为 candidateK）。
-      const retrieved = await this.milvusManager.hybridRetrieve(
-        denseEmbedding,
-        sparseEmbedding,
-        candidateK,
-        filterExpr,
-      );
+      let retrieved: RetrievedChunk[] = [];
+      if (env.enableQueryExtension) {
+        retrieved = await multiQueryRetrieveByMilvus(query, {
+          topK,
+          queryCount: 3,
+          filterExpr,
+        });
+      } else {
+        await this.milvusManager.ensureCollection();
+        // 将用户 query 转成 dense 向量（语义向量），用于 Milvus 的 dense_embedding 近邻检索召回候选。
+        const denseEmbedding = (
+          await this.embeddingService.getEmbeddings([query])
+        )[0];
+        // 将同一个 query 转成 sparse 向量（BM25 风格稀疏向量），用于 sparse_embedding 关键词/词项召回。
+        const sparseEmbedding = this.embeddingService.getSparseEmbedding(query);
+        // 进行 hybrid 检索：dense + sparse 两路召回后用 RRF 融合排序，得到候选集合（数量为 candidateK）。
+        retrieved = await this.milvusManager.hybridRetrieve(
+          denseEmbedding,
+          sparseEmbedding,
+          candidateK,
+          filterExpr,
+        );
+      }
+
       if (!retrieved.length) {
         return {
           docs: [],

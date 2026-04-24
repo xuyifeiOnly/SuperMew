@@ -219,7 +219,7 @@ export class MilvusManager {
             params: { drop_ratio_search: 0.2 },
           },
         ],
-        rerank: { strategy: 'rrf', params: { k: 60 } },
+        rerank: { strategy: 'weighted', params: { weights: [0.8, 0.2] } },
         limit: topK,
         output_fields: SEARCH_OUTPUT_FIELDS,
       });

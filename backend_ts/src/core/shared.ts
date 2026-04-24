@@ -87,6 +87,11 @@ export const createChatModel = (model: string, temperature: number): ChatOpenAI 
     model,
     temperature,
     apiKey: env.arkApiKey,
+    modelKwargs: {
+      // thinking: {
+      //   type: 'disabled',
+      // },
+    },
     configuration: {
       baseURL: env.baseUrl,
     },

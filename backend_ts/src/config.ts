@@ -56,6 +56,7 @@ export const env = {
   gradeModel: readString('GRADE_MODEL', ''),
   fastModel: readString('FAST_MODEL', ''),
   baseUrl: readString('BASE_URL', ''),
+  enableQueryExtension: readBoolean('ENABLE_QUERY_EXTENSION', false),
   embeddingProvider: readString('EMBEDDING_PROVIDER', 'hash').toLowerCase(),
   embeddingModel: readString('EMBEDDING_MODEL', ''),
   denseEmbeddingDim: readNumber('DENSE_EMBEDDING_DIM', 1024),

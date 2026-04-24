@@ -1,2 +1,6 @@
 allowBuilds:
   nodejieba: true
+fetchRetries: 5
+fetchRetryMaxtimeout: 120000
+fetchRetryMintimeout: 20000
+networkTimeout: '300000'
