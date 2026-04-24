@@ -55,7 +55,6 @@ export interface RagTrace {
   current_roles?: string[] | null;
   access_scope?: string | null;
   restricted_file_count?: number | null;
-  initial_retrieved_chunks?: RetrievedChunk[] | null;
   expanded_retrieved_chunks?: RetrievedChunk[] | null;
   retrieved_chunks?: RetrievedChunk[] | null;
   grade_error?: string | null;
